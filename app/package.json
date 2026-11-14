@@ -48,7 +48,7 @@
     "cytoscape": "^3.34.0",
     "dompurify": "^3.4.17",
     "js-yaml": "^5.2.1",
-    "katex": "^0.17.0",
+    "katex": "0.18.10",
     "markdown-it": "^14.3.3",
     "markdown-it-deflist": "^3.0.1",
     "markdown-it-emoji": "^3.0.0",
@@ -58,6 +58,9 @@
     "postcss": "^8.5.19",
     "postcss-prefix-selector": "^2.1.1",
     "shiki": "^4.4.3"
+  },
+  "overrides": {
+    "katex": "$katex"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -72,6 +72,7 @@ export function createFixtures(root) {
   const basic = path.join(root, "basic.md");
   const validMermaid = path.join(root, "valid-mermaid.md");
   const invalidMermaid = path.join(root, "invalid-mermaid.md");
+  const math = path.join(root, "math.md");
   const belowLimit = path.join(root, "below-limit.md");
   const atLimit = path.join(root, "at-limit.md");
   const archive = path.join(root, "notes.zip");
@@ -99,6 +100,20 @@ export function createFixtures(root) {
     ].join("\n")
   );
   writeFileSync(invalidMermaid, "# Broken Mermaid\n\n```mermaid\ngraph TD\n  A -- ???\n```\n");
+  writeFileSync(
+    math,
+    [
+      "# Math",
+      String.raw`Inline: $\frac{1}{2} + \sqrt{2} + \mathbb{R} + \mathbf{x} + \mathit{y}$`,
+      "$$",
+      String.raw`\left(\sum_{i=1}^{n} i\right) = \frac{n(n+1)}{2}`,
+      "$$",
+      "```mermaid",
+      "flowchart LR",
+      String.raw`  A["$$\frac{1}{2}$$"] --> B["Math"]`,
+      "```",
+    ].join("\n\n")
+  );
   writeFileSync(belowLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES - 1, "Below limit"));
   writeFileSync(atLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES, "At limit"));
   writeFileSync(archive, createStoredZip("inside.md", "# Archive\n\nzip-smoke-marker\n"));
@@ -133,6 +148,7 @@ export function createFixtures(root) {
     basic,
     validMermaid,
     invalidMermaid,
+    math,
     belowLimit,
     atLimit,
     archive,
