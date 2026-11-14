@@ -2,6 +2,18 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.2] - 2026-11-14
+
+### Security
+
+- Updated Markdown parsing, HTML sanitization, math rendering, ZIP handling, TLS, and certificate-verification dependencies to address security findings.
+- Updated frontend build and development tools, including a local deepmerge fix with regression tests for prototype poisoning.
+
+### Changed
+
+- Updated Tauri and selected Rust dependencies to resolve additional safety and maintenance findings.
+- Aligned all KaTeX dependencies on the same patched version and added smoke coverage for Markdown and Mermaid math rendering.
+
 ## [0.3.1] - 2026-09-25
 
 ### Added
