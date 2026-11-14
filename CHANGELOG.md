@@ -2,6 +2,18 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.3] - 2026-11-15
+
+### Fixed
+
+- Restored the saved external-editor executable when loading settings, preventing it from being cleared by a subsequent save after restart. External-editor launches continue to require native authorization.
+
+### Changed
+
+- Updated to markdown-it 15 and deflist 4, using the parser's bundled public types. Preserved automatic links for bare domains and email addresses; Japanese punctuation is now excluded from automatically detected URLs.
+- Reduced KaTeX font assets by distributing WOFF2 only while retaining all 20 font faces and the same math-rendering version.
+- Updated the test environment to Vitest 5, jsdom 31, and jest-dom 7, with explicit DOM matcher types and Node.js 24.15.0 or newer in the 24.x series.
+
 ## [0.3.2] - 2026-11-14
 
 ### Security
