@@ -1,0 +1,92 @@
+{
+  "schemaVersion": 1,
+  "issue": "https://github.com/cocoabreak/hiranoa/issues/36",
+  "measuredAt": "2026-11-14",
+  "baselineCommit": "2dc35c0094db30d39305ce35fe672eb0bfc80799",
+  "comparison": "Same KaTeX version and renderer implementation; font stylesheet/build configuration and smoke fixtures changed.",
+  "environment": {
+    "node": "v24.20.0",
+    "os": "win32 10.0.26300",
+    "architecture": "x64",
+    "katex": "0.18.10",
+    "sass": "1.108.2"
+  },
+  "before": {
+    "build": {
+      "total": {
+        "fileCount": 230,
+        "rawBytes": 8674777,
+        "brotliBytes": 2324481
+      },
+      "font": {
+        "fileCount": 59,
+        "rawBytes": 1072948,
+        "brotliBytes": 846843
+      },
+      "katex": {
+        "fileCount": 62,
+        "rawBytes": 1596943,
+        "brotliBytes": 974103
+      }
+    },
+    "distributions": {
+      "Hiranoa_0.3.2_x64_en-US.msi": 5873664,
+      "Hiranoa_0.3.2_x64-portable.zip": 5324655,
+      "Hiranoa_0.3.2_x64-setup.exe": 4740993,
+      "hiranoa.exe": 8594944
+    }
+  },
+  "after": {
+    "build": {
+      "total": {
+        "fileCount": 190,
+        "rawBytes": 7855705,
+        "brotliBytes": 1733460
+      },
+      "font": {
+        "fileCount": 19,
+        "rawBytes": 256168,
+        "brotliBytes": 256222
+      },
+      "katex": {
+        "fileCount": 22,
+        "rawBytes": 780163,
+        "brotliBytes": 383482
+      }
+    },
+    "distributions": {
+      "Hiranoa_0.3.2_x64_en-US.msi": 5271552,
+      "Hiranoa_0.3.2_x64-portable.zip": 4719071,
+      "Hiranoa_0.3.2_x64-setup.exe": 4132563,
+      "hiranoa.exe": 7992832
+    }
+  },
+  "savedBytes": {
+    "totalRaw": 819072,
+    "totalBrotli": 591021,
+    "fontRaw": 816780,
+    "katexRaw": 816780
+  },
+  "validation": {
+    "fontFaces": 20,
+    "woff2Files": 19,
+    "inlineWoff2Fonts": 1,
+    "allOriginalWoff2ContentsPreserved": true,
+    "allFontFacesLoaded": true,
+    "formulasCompared": 4,
+    "sameScreenLayout": true,
+    "samePrintMediaLayout": true,
+    "katexErrors": 0,
+    "windowsBundlesBuilt": true,
+    "frontendTests": 426,
+    "sizeBudgetPassed": true,
+    "webView2SmokeScenarios": 10,
+    "scrollSmokeSetup": "Wait for actual search scroll completion before reload; avoid competing manual and delayed search scrolls."
+  },
+  "limits": [
+    "Windows WebView2 runtime verification only; Linux/macOS runtime was not exercised.",
+    "Print CSS media was emulated; a physical printer and native print dialog were not exercised.",
+    "HTML export does not package KaTeX CSS/fonts before or after this change; export serialization tests verify the existing behavior.",
+    "Distribution sizes are local builds; timestamps and packaging tools can produce different sizes in CI."
+  ]
+}

@@ -133,7 +133,10 @@ try {
     await driver.waitFor("document.querySelector('.mermaid-rendered .katex') !== null", {
       timeoutMs: 30_000,
     });
-    const math = await driver.evaluate(`(() => {
+    const math = await driver.evaluate(`(async () => {
+      const fonts = [...document.fonts].filter(font => font.family.includes('KaTeX'));
+      await Promise.all(fonts.map(font => font.load()));
+      await document.fonts.ready;
       const main = document.querySelector('[role="main"]');
       const formula = main.querySelector('.katex');
       const rendered = formula.querySelector('.katex-html');
@@ -142,6 +145,8 @@ try {
         fractions: main.querySelectorAll('mfrac').length,
         roots: main.querySelectorAll('msqrt').length,
         errors: main.querySelectorAll('.katex-error').length,
+        fontCount: fonts.length,
+        allFontsLoaded: fonts.every(font => font.status === 'loaded'),
         width: box.width,
         height: box.height,
       };
@@ -149,6 +154,8 @@ try {
     assert.ok(math.fractions >= 2);
     assert.ok(math.roots >= 1);
     assert.equal(math.errors, 0);
+    assert.equal(math.fontCount, 20);
+    assert.equal(math.allFontsLoaded, true);
     assert.ok(math.width > 0 && math.height > 0);
   });
 
@@ -245,19 +252,21 @@ try {
     await driver.waitFor("document.querySelector('input') !== null");
     await driver.evaluate(`(() => {
       const input = document.querySelector('input');
-      input.value = 'smoke-marker';
-      input.dispatchEvent(new Event('input', { bubbles: true }));
       const main = document.querySelector('[role="main"]');
-      main.scrollTop = 600;
-      main.dispatchEvent(new Event('scroll'));
+      window.__e2eSearchScrollEnded = false;
+      main.addEventListener('scrollend', () => { window.__e2eSearchScrollEnded = true; }, { once: true });
+      input.value = 'line 10';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
     })()`);
-    await driver.waitFor("window.__e2e.getState().search.query === 'smoke-marker'");
+    // 検索結果への遅延スクロールと手動スクロールを競合させず、実際の移動完了を待つ。
+    await driver.waitFor("window.__e2e.getState().search.query === 'line 10'");
+    await driver.waitFor("window.__e2eSearchScrollEnded === true");
     await driver.waitFor("window.__e2e.getState().scroll.rendered >= 500");
     await driver.evaluate("window.__e2eReloadMarker = 'old-page'");
     await driver.key("Ctrl+R");
     await driver.waitFor("window.__e2eReloadMarker === undefined", { timeoutMs: 30_000 });
     await driver.waitFor("window.__e2e?.getState().hydrated", { timeoutMs: 30_000 });
-    await driver.waitFor("window.__e2e.getState().search.query === 'smoke-marker'");
+    await driver.waitFor("window.__e2e.getState().search.query === 'line 10'");
     await driver.waitFor("document.querySelector('[role=\"main\"]')?.scrollTop >= 500");
     const restored = await state();
     assert.equal(restored.activeTab.title, "basic.md");
