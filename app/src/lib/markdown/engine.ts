@@ -1,4 +1,4 @@
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from "markdown-it";
 import { createHighlighterCore, type HighlighterCore } from "shiki/core";
 import { createOnigurumaEngine } from "shiki/engine/oniguruma";
 import getWasm from "shiki/wasm";
@@ -116,7 +116,7 @@ export interface RenderResult {
 // new MarkdownIt() とプラグイン適用は比較的重く、ファイル切替のたびに作り直すと無駄なため、
 // 構成が同じ間は再利用する。テーマ・行番号などレンダリング時に変わる設定はインスタンス構造に
 // 影響しないので、fenceレンダラーが activeRenderOptions から都度読む。
-const mdCache = new Map<string, MarkdownIt>();
+const mdCache = new Map<string, MarkdownItInstance>();
 
 // fenceレンダラーが参照する「現在のレンダリング設定」。md.render() は同期実行で、直前に
 // 設定してから内部でawaitを挟まないため、複数レンダリングが並行しても取り違えは起きない。
@@ -134,7 +134,7 @@ function rendererSignature(renderers: Record<string, boolean>): string {
 async function getMarkdownIt(
   renderers: Record<string, boolean>,
   highlighter: HighlighterCore
-): Promise<MarkdownIt> {
+): Promise<MarkdownItInstance> {
   const signature = rendererSignature(renderers);
   const cached = mdCache.get(signature);
   if (cached) return cached;
@@ -144,6 +144,8 @@ async function getMarkdownIt(
     linkify: true,
     breaks: false,
   });
+  // linkify-it 6で変更された既定値に依存せず、従来の裸のドメイン・メール検出を維持する。
+  md.linkify.set({ fuzzyLink: true, fuzzyEmail: true, fuzzyIP: false });
 
   // タスクリスト（GFM）
   md.use(taskLists, { enabled: true, label: true });

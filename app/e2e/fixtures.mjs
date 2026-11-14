@@ -73,6 +73,7 @@ export function createFixtures(root) {
   const validMermaid = path.join(root, "valid-mermaid.md");
   const invalidMermaid = path.join(root, "invalid-mermaid.md");
   const math = path.join(root, "math.md");
+  const compatibility = path.join(root, "compatibility.md");
   const belowLimit = path.join(root, "below-limit.md");
   const atLimit = path.join(root, "at-limit.md");
   const archive = path.join(root, "notes.zip");
@@ -121,6 +122,22 @@ export function createFixtures(root) {
     ].join("\n\n")
   );
   writeFileSync(belowLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES - 1, "Below limit"));
+  writeFileSync(
+    compatibility,
+    [
+      "# Markdown compatibility",
+      "## 日本語見出し",
+      "## 日本語見出し",
+      "Term\n: **Definition**[^note]",
+      "[^note]: Footnote body",
+      "> [!NOTE] Callout title\n> Callout body",
+      "- [x] Completed task",
+      ":smile:",
+      String.raw`$\frac{1}{2}$`,
+      "www.example.com user@example.com https://example.com/。次の文",
+      "[local](guide/index.md) [[guide/index|Local Wiki]]",
+    ].join("\n\n")
+  );
   writeFileSync(atLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES, "At limit"));
   writeFileSync(archive, createStoredZip("inside.md", "# Archive\n\nzip-smoke-marker\n"));
   const directoryLinks = path.join(root, "directory-links.md");
@@ -155,6 +172,7 @@ export function createFixtures(root) {
     validMermaid,
     invalidMermaid,
     math,
+    compatibility,
     belowLimit,
     atLimit,
     archive,

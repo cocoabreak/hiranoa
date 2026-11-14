@@ -1,6 +1,5 @@
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type Token } from "markdown-it";
 import footnote from "markdown-it-footnote";
-import type Token from "markdown-it/lib/token.mjs";
 import { extractFrontmatter } from "$lib/markdown/frontmatter";
 import { basename } from "$lib/utils";
 import {

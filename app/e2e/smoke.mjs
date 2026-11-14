@@ -64,6 +64,40 @@ try {
     assert.equal((await state()).activeTab.renderMode, "full");
   });
 
+  await test("Markdown方言・リンク・数式の互換性を維持する", async () => {
+    await open("openMarkdownFile", fixtures.compatibility);
+    await driver.waitFor("document.querySelector('.markdown-body .katex mfrac') !== null");
+    await driver.waitFor(
+      "document.querySelector('.wiki-link:not(.wiki-link-missing)[href]') !== null"
+    );
+    const result = await driver.evaluate(`(() => {
+      const main = document.querySelector('.markdown-body');
+      return {
+        headingIds: [...main.querySelectorAll('h2')].map(h => h.id),
+        definition: main.querySelector('dl dd strong')?.textContent,
+        footnote: main.querySelector('.footnote-ref a')?.getAttribute('href'),
+        footnoteTarget: main.querySelector('#fn1')?.textContent,
+        callout: main.querySelector('.callout-note .callout-title-text')?.textContent,
+        checked: main.querySelector('input[type="checkbox"]')?.checked,
+        emoji: main.textContent.includes('😄'),
+        links: [...main.querySelectorAll('a')].map(a => a.getAttribute('href')),
+        cjkLink: [...main.querySelectorAll('a')].find(a => a.textContent === 'https://example.com/')?.getAttribute('href'),
+      };
+    })()`);
+    assert.equal(result.headingIds.length, 2);
+    assert.ok(result.headingIds[0]);
+    assert.notEqual(result.headingIds[0], result.headingIds[1]);
+    assert.equal(result.definition, "Definition");
+    assert.equal(result.footnote, "#fn1");
+    assert.ok(result.footnoteTarget.includes("Footnote body"));
+    assert.equal(result.callout, "Callout title");
+    assert.equal(result.checked, true);
+    assert.equal(result.emoji, true);
+    assert.ok(result.links.includes("http://www.example.com"));
+    assert.ok(result.links.includes("mailto:user@example.com"));
+    assert.equal(result.cjkLink, "https://example.com/");
+  });
+
   await test("正常なMermaidをSVG表示できる", async () => {
     await open("openMarkdownFile", fixtures.validMermaid);
     await driver.waitFor("document.querySelector('.mermaid-rendered svg') !== null", {
@@ -247,6 +281,11 @@ try {
     await open("openMarkdownFile", fixtures.basic);
     await driver.waitFor(
       "document.querySelector('[role=\"main\"]')?.scrollHeight > document.querySelector('[role=\"main\"]')?.clientHeight + 600"
+    );
+    // 対象文書のDOM構築と二段階の初期スクロール復元が完了してから検索する。
+    await driver.waitFor("document.querySelector('.markdown-body #section-299') !== null");
+    await driver.evaluate(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
     );
     await driver.key("Ctrl+F");
     await driver.waitFor("document.querySelector('input') !== null");

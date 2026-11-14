@@ -1,4 +1,4 @@
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import type { Locale } from "$lib/i18n/index.svelte";
 import type { DocumentRef, DocumentSourceInfo } from "$lib/types";
 
