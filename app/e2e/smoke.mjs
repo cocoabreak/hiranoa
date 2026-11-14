@@ -128,6 +128,30 @@ try {
     assert.equal(labelMetrics.paragraphLineHeight, "28px");
   });
 
+  await test("数式とMermaid内数式を描画できる", async () => {
+    await open("openMarkdownFile", fixtures.math);
+    await driver.waitFor("document.querySelector('.mermaid-rendered .katex') !== null", {
+      timeoutMs: 30_000,
+    });
+    const math = await driver.evaluate(`(() => {
+      const main = document.querySelector('[role="main"]');
+      const formula = main.querySelector('.katex');
+      const rendered = formula.querySelector('.katex-html');
+      const box = rendered.getBoundingClientRect();
+      return {
+        fractions: main.querySelectorAll('mfrac').length,
+        roots: main.querySelectorAll('msqrt').length,
+        errors: main.querySelectorAll('.katex-error').length,
+        width: box.width,
+        height: box.height,
+      };
+    })()`);
+    assert.ok(math.fractions >= 2);
+    assert.ok(math.roots >= 1);
+    assert.equal(math.errors, 0);
+    assert.ok(math.width > 0 && math.height > 0);
+  });
+
   await test("不正なMermaidをエラー表示できる", async () => {
     await open("openMarkdownFile", fixtures.invalidMermaid);
     await driver.waitFor("document.querySelector('.mermaid-error-container') !== null", {

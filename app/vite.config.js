@@ -1,5 +1,8 @@
 import { defineConfig } from "vitest/config";
 import { sveltekit } from "@sveltejs/kit/vite";
+import adapter from "@sveltejs/adapter-static";
+import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
+import { fileURLToPath } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import packageJson from "./package.json" with { type: "json" };
 import packageLock from "./package-lock.json" with { type: "json" };
@@ -10,7 +13,7 @@ const aboutPackages = {
   shiki: "Shiki",
   dompurify: "DOMPurify",
 };
-/** @type {Record<string, { version?: string; license?: string }>} */
+/** @type {Record<string, { version?: string; license?: string; [key: string]: unknown }>} */
 const lockedPackages = packageLock.packages;
 const aboutBuildInfo = {
   appVersion: packageJson.version,
@@ -25,8 +28,8 @@ const aboutBuildInfo = {
   ),
 };
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+const isVitest = Boolean(process.env.VITEST);
 
 // 明示的な戻り値の型注釈が必要:
 // この関数は server.hmr の三項演算子 + test.coverage を同時に含んでおり、
@@ -35,7 +38,14 @@ const host = process.env.TAURI_DEV_HOST;
 // (svelte-check で再現確認済み)。
 /** @type {() => Promise<import('vitest/config').ViteUserConfig>} */
 const config = async () => ({
-  plugins: [sveltekit(), tailwindcss()],
+  plugins: [
+    sveltekit({
+      preprocess: vitePreprocess(),
+      adapter: adapter({ fallback: "index.html" }),
+      version: { pollInterval: 0 },
+    }),
+    tailwindcss(),
+  ],
   define: {
     __ABOUT_BUILD_INFO__: JSON.stringify(aboutBuildInfo),
   },
@@ -51,8 +61,11 @@ const config = async () => ({
   // Vitest実行時はsvelteをクライアント(browser)条件で解決させる。
   // 未指定だとSvelteKitのvite pluginがSSR条件で解決し、
   // @testing-library/svelte の mount() が「サーバーでは使えない」エラーになる。
-  // @ts-expect-error process is a nodejs global
-  resolve: process.env.VITEST ? { conditions: ["browser"] } : undefined,
+  resolve: {
+    // 既存importを維持し、SvelteKit 3で自動生成されなくなったaliasを明示する。
+    alias: { $lib: fileURLToPath(new URL("./src/lib", import.meta.url)) },
+    ...(isVitest ? { conditions: ["browser"] } : {}),
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

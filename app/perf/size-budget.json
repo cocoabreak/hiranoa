@@ -12,6 +12,64 @@
         "previousBaselineBytes": 2393647,
         "baselineBytes": 2579904,
         "reason": "C++・Mermaid文法の拡張による増加を同一依存条件で確認し、対応言語を維持して採用。"
+      },
+      {
+        "metric": "build.initial.rawBytes",
+        "comparisonCommit": "a293bb03ae702397ef5021929f3ff64fd11bae56",
+        "node": "24.20.0",
+        "measurements": 2,
+        "maxObservedVariationPercent": 0,
+        "previousBaselineBytes": 200914,
+        "beforeUpdateBytes": 203116,
+        "baselineBytes": 215765,
+        "dependencyVersions": {
+          "@sveltejs/kit": {
+            "before": "2.70.3",
+            "after": "3.2.0"
+          },
+          "@sveltejs/adapter-static": {
+            "before": "3.0.10",
+            "after": "4.0.1"
+          },
+          "svelte": {
+            "before": "5.57.1",
+            "after": "5.57.3"
+          },
+          "vite": {
+            "before": "8.3.0",
+            "after": "8.3.8"
+          }
+        },
+        "reason": "セキュリティ修正のためビルド基盤を更新。同じNodeとアプリコードで更新前後を比較し、更新後2回の初期ロードサイズが一致した。必要な依存更新の増加を基準へ反映し、増加許容率5%を維持する。"
+      },
+      {
+        "metric": "build.initial.brotliBytes",
+        "comparisonCommit": "a293bb03ae702397ef5021929f3ff64fd11bae56",
+        "node": "24.20.0",
+        "measurements": 2,
+        "maxObservedVariationPercent": 0,
+        "previousBaselineBytes": 59014,
+        "beforeUpdateBytes": 59369,
+        "baselineBytes": 63711,
+        "dependencyVersions": {
+          "@sveltejs/kit": {
+            "before": "2.70.3",
+            "after": "3.2.0"
+          },
+          "@sveltejs/adapter-static": {
+            "before": "3.0.10",
+            "after": "4.0.1"
+          },
+          "svelte": {
+            "before": "5.57.1",
+            "after": "5.57.3"
+          },
+          "vite": {
+            "before": "8.3.0",
+            "after": "8.3.8"
+          }
+        },
+        "reason": "セキュリティ修正のためビルド基盤を更新。同じNodeとアプリコードで更新前後を比較し、更新後2回の初期ロードサイズが一致した。必要な依存更新の増加を基準へ反映し、増加許容率5%を維持する。"
       }
     ]
   },
@@ -19,8 +77,8 @@
   "baselines": {
     "build.total.rawBytes": 8734210,
     "build.total.brotliBytes": 2379635,
-    "build.initial.rawBytes": 200914,
-    "build.initial.brotliBytes": 59014,
+    "build.initial.rawBytes": 215765,
+    "build.initial.brotliBytes": 63711,
     "build.featureGroups.katex.rawBytes": 1908215,
     "build.featureGroups.katex.brotliBytes": 1054897,
     "build.featureGroups.mermaid.rawBytes": 3450733,

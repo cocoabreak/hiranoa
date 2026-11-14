@@ -1,0 +1,10 @@
+{
+  "name": "@hiranoa/deepmerge",
+  "version": "4.3.1-patch.1",
+  "private": true,
+  "description": "deepmerge 4.3.1 with GHSA-gcqx-w48m-w2h4 fixed",
+  "type": "commonjs",
+  "main": "index.cjs",
+  "types": "index.d.cts",
+  "license": "MIT"
+}
