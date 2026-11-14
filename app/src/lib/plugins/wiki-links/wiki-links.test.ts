@@ -1,4 +1,4 @@
-import MarkdownIt from "markdown-it";
+import MarkdownIt, { type MarkdownIt as MarkdownItInstance } from "markdown-it";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import wikiLinksPlugin, { getWikiLinkTarget, watchWikiLinkTarget } from "./index";
 
@@ -8,7 +8,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 // パース（extendMarkdownIt）のテスト。リンク解決（postRender/Rust側）はRustユニットテストと
 // 実機確認でカバーする
 describe("wiki-linksプラグインのパース", () => {
-  let md: MarkdownIt;
+  let md: MarkdownItInstance;
 
   beforeAll(async () => {
     md = new MarkdownIt();

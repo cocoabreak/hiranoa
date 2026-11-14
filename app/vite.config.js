@@ -50,6 +50,14 @@ const config = async () => ({
     __ABOUT_BUILD_INFO__: JSON.stringify(aboutBuildInfo),
   },
 
+  css: {
+    preprocessorOptions: {
+      scss: {
+        additionalData: `$hiranoa-katex-version: ${JSON.stringify(aboutBuildInfo.components.katex.version)}; `,
+      },
+    },
+  },
+
   // ADR-010: dev の依存事前バンドル（Rolldown optimizeDeps）が katex を壊し、
   // \frac 等のコマンドが描画されなくなる（\f がフォームフィード化）。katex を
   // 事前バンドルから除外し、素のESM(dist/katex.mjs)を読ませて回避する。

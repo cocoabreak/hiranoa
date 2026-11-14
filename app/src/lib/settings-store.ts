@@ -66,6 +66,10 @@ export async function loadSettings(): Promise<void> {
           settingsStore.toggleLineNumbers();
         }
       }
+      // パスの復元は実行の認可ではない。起動時は既存のRustネイティブ確認を通す。
+      if (typeof saved.externalEditorCommand === "string") {
+        settingsStore.setExternalEditorCommand(saved.externalEditorCommand);
+      }
       if (typeof saved.customCssEnabled === "boolean") {
         settingsStore.setCustomCssEnabled(saved.customCssEnabled);
       }

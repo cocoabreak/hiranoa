@@ -1,6 +1,6 @@
 <script lang="ts">
   import "../app.css";
-  import "katex/dist/katex.min.css";
+  import "$lib/styles/katex.scss";
   import type { Snippet } from "svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import { onMount } from "svelte";

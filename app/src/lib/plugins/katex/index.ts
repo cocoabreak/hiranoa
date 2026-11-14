@@ -1,11 +1,12 @@
-import type { PluginWithParams } from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import type { ViewerPlugin } from "../types";
 
 // KaTeXプラグインは動的importで別チャンクに分離する（Mermaidと同じ方針）。
 // 静的importだと数式を使わないファイルでも起動時に必ずロードされてしまうため。
-let katexPluginPromise: Promise<PluginWithParams> | null = null;
+type KatexPlugin = (md: MarkdownIt) => void;
+let katexPluginPromise: Promise<KatexPlugin> | null = null;
 
-function getKatexPlugin(): Promise<PluginWithParams> {
+function getKatexPlugin(): Promise<KatexPlugin> {
   if (!katexPluginPromise) {
     // ADR-010: Vite 8/Rolldown が markdown-it-katex 内の require('katex')（CJS/UMD版
     // dist/katex.js）を再バンドル時に壊し、\frac 等のコマンドが描画されなくなる。
@@ -15,11 +16,10 @@ function getKatexPlugin(): Promise<PluginWithParams> {
       import("@traptitech/markdown-it-katex"),
       import("katex"),
     ]).then(([pluginMod, katexMod]) => {
-      const plugin = pluginMod.default as PluginWithParams;
       const katex = katexMod.default;
-      const wrapped: PluginWithParams = (md, ...params) => {
-        const options = (params[0] as Record<string, unknown> | undefined) ?? {};
-        plugin(md, { ...options, katex });
+      const wrapped: KatexPlugin = (md) => {
+        // 無効なTeXはエラー要素として表示し、ESM版を明示的に注入する。
+        pluginMod.default(md, { throwOnError: false, errorColor: "#cc0000", katex });
       };
       return wrapped;
     });
@@ -38,11 +38,7 @@ const katexPlugin: ViewerPlugin = {
 
   async extendMarkdownIt(md): Promise<void> {
     const plugin = await getKatexPlugin();
-    // throwOnError: false で無効なTeX記法をエラーにせず表示する
-    md.use(plugin, {
-      throwOnError: false,
-      errorColor: "#cc0000",
-    });
+    md.use(plugin);
   },
 };
 

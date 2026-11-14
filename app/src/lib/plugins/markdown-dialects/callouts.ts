@@ -1,5 +1,4 @@
-import type MarkdownIt from "markdown-it";
-import type Token from "markdown-it/lib/token.mjs";
+import type { MarkdownIt, Token } from "markdown-it";
 
 export const MAX_CALLOUT_DEPTH = 4;
 export const MAX_CALLOUTS_PER_DOCUMENT = 256;
@@ -31,11 +30,11 @@ interface CalloutDefinition {
   icon: CalloutIcon;
 }
 
-interface CalloutMeta {
+type CalloutMeta = {
   type: CanonicalCalloutType;
   title: string;
   fold: FoldState;
-}
+};
 
 const CALLOUT_DEFINITIONS: Record<CanonicalCalloutType, CalloutDefinition> = {
   note: { title: "Note", icon: "info" },

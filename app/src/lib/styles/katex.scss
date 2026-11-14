@@ -1,0 +1,8 @@
+// すべての書体を維持し、WebView向けには同じフォントのWOFF2だけを配布する。
+@use "katex/src/styles/katex" with (
+  $font-folder: "katex/dist/fonts",
+  $use-ttf: false,
+  $use-woff: false,
+  $use-woff2: true,
+  $version: $hiranoa-katex-version
+);

@@ -39,4 +39,17 @@ describe("Markdown dialects", () => {
     expect(html).toContain("<dt>Term</dt>");
     expect(html).toContain("<dd>Definition</dd>");
   });
+
+  it("定義リストと脚注・Calloutを同じ文書で描画する", () => {
+    const html = render(
+      "Term\n: **Definition**[^note]\n\n[^note]: Footnote\n\n> [!NOTE] Title\n> Body"
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    expect(container.querySelector("dl dt")?.textContent).toBe("Term");
+    expect(container.querySelector("dl dd strong")?.textContent).toBe("Definition");
+    expect(container.querySelector(".footnote-ref a")?.getAttribute("href")).toBe("#fn1");
+    expect(container.querySelector("#fn1")?.textContent).toContain("Footnote");
+    expect(container.querySelector(".callout-note .callout-title-text")?.textContent).toBe("Title");
+  });
 });

@@ -1,6 +1,6 @@
 {
   "name": "hiranoa",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "A fast, read-only Markdown viewer for local files.",
   "type": "module",
   "repository": {
@@ -12,7 +12,7 @@
     "url": "https://github.com/cocoabreak/hiranoa/issues"
   },
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24.15.0 <25"
   },
   "scripts": {
     "dev": "vite dev",
@@ -49,8 +49,8 @@
     "dompurify": "^3.4.17",
     "js-yaml": "^5.2.1",
     "katex": "0.18.10",
-    "markdown-it": "^14.3.3",
-    "markdown-it-deflist": "^3.0.1",
+    "markdown-it": "^15.0.3",
+    "markdown-it-deflist": "^4.0.0",
     "markdown-it-emoji": "^3.0.0",
     "markdown-it-footnote": "^4.0.0",
     "markdown-it-task-lists": "^2.1.1",
@@ -73,29 +73,30 @@
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tailwindcss/vite": "^4.3.2",
     "@tauri-apps/cli": "^2.12.4",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/svelte": "^5.4.2",
-    "@types/markdown-it": "14.1.2",
     "@types/markdown-it-emoji": "^3.0.1",
     "@types/markdown-it-footnote": "^3.0.4",
     "@types/node": "^24.19.2",
     "@types/postcss-prefix-selector": "^1.16.3",
     "@typescript-eslint/eslint-plugin": "^8.72.2",
     "@typescript-eslint/parser": "^8.72.2",
-    "@vitest/coverage-v8": "^4.1.12",
+    "@vitest/coverage-v8": "^5.1.0",
     "deepmerge": "file:vendor/deepmerge",
     "eslint": "^10.15.0",
     "eslint-plugin-svelte": "^3.20.0",
-    "globals": "^16.5.0",
-    "jsdom": "^29.1.1",
+    "globals": "^17.14.0",
+    "jsdom": "^31.0.1",
     "prettier": "^3.9.5",
     "prettier-plugin-svelte": "^4.1.1",
+    "sass": "^1.108.2",
     "svelte": "^5.57.3",
     "svelte-check": "^4.0.0",
     "svelte-eslint-parser": "^1.8.0",
     "tailwindcss": "^4.3.2",
     "typescript": "~6.0.3",
     "vite": "^8.3.8",
-    "vitest": "^4.1.12"
+    "vitest": "^5.1.0"
   }
 }

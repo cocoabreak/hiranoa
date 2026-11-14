@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type MarkdownIt from "markdown-it";
+import type { MarkdownIt } from "markdown-it";
 import type { Locale } from "$lib/i18n/index.svelte";
 import type { PostRenderContext, ViewerPlugin } from "../types";
 import type { DocumentRef } from "$lib/types";
