@@ -8,3 +8,4 @@ perf/windows-job-member.ps1
 perf/windows-job-open.ps1
 src-tauri
 coverage
+vendor/deepmerge

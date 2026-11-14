@@ -70,6 +70,14 @@ export default [
   },
 
   {
-    ignores: [".svelte-kit/**", "build/**", "node_modules/**", "perf/artifacts/**", "src-tauri/**"],
+    ignores: [
+      ".svelte-kit/**",
+      "build/**",
+      "node_modules/**",
+      "perf/artifacts/**",
+      "e2e/artifacts/**",
+      "src-tauri/**",
+      "vendor/deepmerge/**",
+    ],
   },
 ];
