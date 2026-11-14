@@ -12,7 +12,7 @@
     "sourceMap": true,
     "strict": true,
     "moduleResolution": "bundler",
-    "types": ["$app/types", "node", "@testing-library/jest-dom"],
+    "types": ["$app/types", "node"],
     "paths": {
       "$lib": ["./src/lib"],
       "$lib/*": ["./src/lib/*"]
