@@ -346,6 +346,10 @@ export const en: typeof ja = {
     upToDate: "You are using the latest version",
     available: (version: string) => `Version ${version} is available`,
     failed: "Could not check for updates",
+    errorDetails: "Error details",
+    copyErrorDetails: "Copy error details",
+    errorDetailsCopied: "Copied",
+    errorDetailsCopyFailed: "Could not copy. Select the details and copy them manually.",
     openReleases: "Open Releases",
   },
   statusBar: {

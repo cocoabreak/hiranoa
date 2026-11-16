@@ -1,7 +1,8 @@
 use semver::Version;
 use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::io::Read;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::time::Instant;
 use tauri::State;
@@ -33,8 +34,8 @@ struct UpdateCheckerInner {
     last_result: Option<(Instant, Result<UpdateCheckResult, String>)>,
 }
 
-#[derive(Default)]
-pub struct UpdateCheckerState(Mutex<UpdateCheckerInner>);
+#[derive(Clone, Default)]
+pub struct UpdateCheckerState(Arc<Mutex<UpdateCheckerInner>>);
 
 impl UpdateCheckerState {
     fn cached_or_reserve(&self) -> Result<Option<Result<UpdateCheckResult, String>>, String> {
@@ -83,23 +84,46 @@ fn parse_release(body: &[u8], current_version: &str) -> Result<UpdateCheckResult
     })
 }
 
-fn request_latest_release() -> Result<UpdateCheckResult, String> {
-    let config = ureq::Agent::config_builder()
+fn update_request_config() -> ureq::config::Config {
+    ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder()
+                .root_certs(ureq::tls::RootCerts::PlatformVerifier)
+                .build(),
+        )
         .timeout_global(Some(REQUEST_TIMEOUT))
         .max_redirects(0)
-        .build();
-    let agent: ureq::Agent = config.into();
+        .build()
+}
+
+fn format_request_error(context: &str, error: &(dyn Error + 'static)) -> String {
+    let mut details = format!("{context}\nURL: {LATEST_RELEASE_API_URL}\n{error}");
+    let mut source = error.source();
+    // Bound the diagnostic chain even if a dependency returns a cyclic source.
+    for _ in 0..8 {
+        let Some(cause) = source else { break };
+        details.push_str(&format!("\nCaused by: {cause}"));
+        source = cause.source();
+    }
+    details
+}
+
+fn request_latest_release() -> Result<UpdateCheckResult, String> {
+    let agent = update_request_config().new_agent();
     let mut response = agent
         .get(LATEST_RELEASE_API_URL)
         .header("Accept", "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("User-Agent", "Hiranoa")
         .call()
-        .map_err(|error| match error {
-            ureq::Error::StatusCode(404) => {
-                "公開されているGitHub Releaseが見つかりませんでした".to_string()
-            }
-            _ => format!("GitHub Releasesへ接続できませんでした: {error}"),
+        .map_err(|error| {
+            let context = match error {
+                ureq::Error::StatusCode(404) => {
+                    "公開されているGitHub Releaseが見つかりませんでした"
+                }
+                _ => "GitHub Releasesへ接続できませんでした",
+            };
+            format_request_error(context, &error)
         })?;
     let mut body = Vec::new();
     response
@@ -107,11 +131,38 @@ fn request_latest_release() -> Result<UpdateCheckResult, String> {
         .as_reader()
         .take(MAX_RESPONSE_BYTES + 1)
         .read_to_end(&mut body)
-        .map_err(|error| format!("GitHub Releasesの応答を読み取れませんでした: {error}"))?;
+        .map_err(|error| {
+            format_request_error("GitHub Releasesの応答を読み取れませんでした", &error)
+        })?;
     if body.len() as u64 > MAX_RESPONSE_BYTES {
         return Err("GitHub Releasesの応答が大きすぎます".to_string());
     }
     parse_release(&body, env!("CARGO_PKG_VERSION"))
+}
+
+async fn run_reserved_update_request(
+    state: UpdateCheckerState,
+    request: impl FnOnce() -> Result<UpdateCheckResult, String> + Send + 'static,
+    timeout: Duration,
+) -> Result<UpdateCheckResult, String> {
+    // OS certificate verification can outlive the HTTP timeout. The detached task
+    // retains the reservation until the blocking worker ends, including on panic.
+    let task = tauri::async_runtime::spawn(async move {
+        let result = match tauri::async_runtime::spawn_blocking(request).await {
+            Ok(result) => result,
+            Err(_) => Err("更新確認タスクを完了できませんでした".to_string()),
+        };
+        state.finish(result.clone())?;
+        result
+    });
+    match tokio::time::timeout(timeout, task).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(_)) => Err("更新確認タスクを完了できませんでした".to_string()),
+        Err(error) => Err(format_request_error(
+            "GitHub Releasesの更新確認がタイムアウトしました",
+            &error,
+        )),
+    }
 }
 
 #[tauri::command(async)]
@@ -121,17 +172,112 @@ pub async fn check_for_updates(
     if let Some(cached) = state.cached_or_reserve()? {
         return cached;
     }
-    let result = match tauri::async_runtime::spawn_blocking(request_latest_release).await {
-        Ok(result) => result,
-        Err(_) => Err("更新確認タスクを完了できませんでした".to_string()),
-    };
-    state.finish(result.clone())?;
-    result
+    run_reserved_update_request(
+        state.inner().clone(),
+        request_latest_release,
+        REQUEST_TIMEOUT,
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_keeps_reservation_until_worker_finishes_and_caches_its_result() {
+        let state = UpdateCheckerState::default();
+        assert!(state.cached_or_reserve().unwrap().is_none());
+        let (release, wait_for_release) = std::sync::mpsc::channel();
+        let result = tauri::async_runtime::block_on(run_reserved_update_request(
+            state.clone(),
+            move || {
+                wait_for_release
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap();
+                Err("offline".to_string())
+            },
+            Duration::from_millis(20),
+        ));
+        assert!(result.unwrap_err().contains("タイムアウト"));
+        assert!(state.cached_or_reserve().is_err());
+
+        release.send(()).unwrap();
+        let cached = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    if let Ok(Some(result)) = state.cached_or_reserve() {
+                        return result;
+                    }
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("worker must release its reservation and cache the result")
+        });
+        assert_eq!(cached, Err("offline".to_string()));
+    }
+
+    #[test]
+    fn worker_panic_releases_reservation_and_caches_failure() {
+        let state = UpdateCheckerState::default();
+        state.cached_or_reserve().unwrap();
+        let result = tauri::async_runtime::block_on(run_reserved_update_request(
+            state.clone(),
+            || panic!("simulated worker failure"),
+            Duration::from_secs(2),
+        ));
+        assert!(result.as_ref().unwrap_err().contains("タスク"));
+        assert_eq!(state.cached_or_reserve().unwrap(), Some(result));
+    }
+
+    #[test]
+    fn update_requests_use_platform_verification() {
+        let config = update_request_config();
+        assert!(matches!(
+            config.tls_config().root_certs(),
+            ureq::tls::RootCerts::PlatformVerifier
+        ));
+        assert!(!config.tls_config().disable_verification());
+    }
+
+    #[test]
+    fn request_errors_include_endpoint_and_http_status() {
+        for status in [403, 404, 429] {
+            let details = format_request_error("request failed", &ureq::Error::StatusCode(status));
+            assert!(details.contains(LATEST_RELEASE_API_URL));
+            assert!(details.contains(&status.to_string()));
+        }
+    }
+
+    #[test]
+    fn request_errors_preserve_nested_causes() {
+        #[derive(Debug)]
+        struct TlsError;
+        impl std::fmt::Display for TlsError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "UnknownIssuer")
+            }
+        }
+        impl Error for TlsError {}
+
+        #[derive(Debug)]
+        struct TransportError(TlsError);
+        impl std::fmt::Display for TransportError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "TLS connection failed")
+            }
+        }
+        impl Error for TransportError {
+            fn source(&self) -> Option<&(dyn Error + 'static)> {
+                Some(&self.0)
+            }
+        }
+
+        let details = format_request_error("request failed", &TransportError(TlsError));
+        assert!(details.contains("TLS connection failed"));
+        assert!(details.contains("Caused by: UnknownIssuer"));
+    }
 
     #[test]
     fn release_comparison_accepts_v_prefix_and_detects_newer_versions() {

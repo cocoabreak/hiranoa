@@ -2,6 +2,23 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.4] - 2026-11-16
+
+### Added
+
+- Added a two-pane split view with independent tabs, scroll positions, view modes, searches, and navigation. Open or move documents to the other pane, resize the split, and restore the layout with the session.
+- Expanded YAML frontmatter browsing with selected properties, nested values, configurable display labels, source references, and reverse source lookup. Search properties, tags, folders, and source URLs in native folders and ZIP archives.
+- Added expandable update-check error details and a copy button in About, with feedback for copy success and failure.
+
+### Fixed
+
+- Update checks now use the operating system's certificate verification and trust store, allowing trusted enterprise certificate authorities to be recognized. Certificate verification remains enabled.
+- Limited update-check waiting to five seconds even when operating-system certificate checks take longer, while preventing duplicate background requests.
+
+### Security
+
+- Updated the indirect webpki-root-certs dependency to 1.0.10 to address a bundled certificate trust advisory.
+
 ## [0.3.3] - 2026-11-15
 
 ### Fixed

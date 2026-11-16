@@ -349,6 +349,10 @@ export const ja = {
     upToDate: "最新バージョンです",
     available: (version: string) => `新しいバージョン ${version} があります`,
     failed: "更新を確認できませんでした",
+    errorDetails: "エラー詳細",
+    copyErrorDetails: "エラー詳細をコピー",
+    errorDetailsCopied: "コピーしました",
+    errorDetailsCopyFailed: "コピーできませんでした。詳細を選択してコピーしてください。",
     openReleases: "リリースページを開く",
   },
   statusBar: {

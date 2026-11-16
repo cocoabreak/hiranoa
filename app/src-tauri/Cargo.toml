@@ -1,6 +1,6 @@
 [package]
 name = "hiranoa"
-version = "0.3.3"
+version = "0.3.4"
 description = "Hiranoa, a lightweight read-only Markdown viewer"
 authors = ["Hirofumi Akiyama"]
 license = "MIT"
@@ -35,7 +35,8 @@ sys-locale = "0.3"
 pulldown-cmark = { version = "0.13.6", default-features = false }
 zip = { version = "=9.0.0", default-features = false, features = ["deflate-flate2-zlib-rs", "deflate64"] }
 semver = "1.0.28"
-ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls", "platform-verifier"] }
+tokio = { version = "1", features = ["time"] }
 
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"

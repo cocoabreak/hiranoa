@@ -7,6 +7,7 @@
   import { viewerPlugins } from "$lib/plugins";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import { updateCheckStore } from "$lib/stores/update-check.svelte";
+  import UpdateCheckError from "./UpdateCheckError.svelte";
 
   let { onclose }: { onclose: () => void } = $props();
 
@@ -130,6 +131,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
             </button>
           </div>
         </div>
+        {#if updateCheckStore.state.status === "error"}
+          {#key updateCheckStore.state}
+            <UpdateCheckError details={updateCheckStore.state.details} />
+          {/key}
+        {/if}
       </div>
 
       <div class="mt-5 space-y-3">
