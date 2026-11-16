@@ -12,7 +12,7 @@ export type UpdateCheckState =
   | { status: "checking" }
   | ({ status: "up-to-date" } & UpdateCheckResult)
   | ({ status: "available" } & UpdateCheckResult)
-  | { status: "error" };
+  | { status: "error"; details: string };
 
 type UpdateChecker = () => Promise<UpdateCheckResult>;
 
@@ -45,7 +45,9 @@ export function createUpdateCheckStore(
       .then(applyResult)
       .catch((error: unknown) => {
         console.warn("更新を確認できませんでした:", error);
-        state = reportActiveError ? { status: "error" } : previousState;
+        state = reportActiveError
+          ? { status: "error", details: error instanceof Error ? error.message : String(error) }
+          : previousState;
       })
       .finally(() => {
         activeRequest = null;

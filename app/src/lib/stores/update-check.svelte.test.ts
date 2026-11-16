@@ -43,7 +43,7 @@ describe("updateCheckStore", () => {
     expect(store.state.status).toBe("idle");
 
     await store.check({ force: true });
-    expect(store.state).toEqual({ status: "error" });
+    expect(store.state).toEqual({ status: "error", details: "offline" });
   });
 
   it("自動確認中に手動確認された場合は失敗を表示する", async () => {
@@ -57,6 +57,26 @@ describe("updateCheckStore", () => {
     reject(new Error("offline"));
     await Promise.all([automatic, manual]);
 
-    expect(store.state).toEqual({ status: "error" });
+    expect(store.state).toEqual({ status: "error", details: "offline" });
+  });
+
+  it("Rustのエラー文字列を保持し、再確認中と成功後は古いエラーを消す", async () => {
+    const details = "GitHub Releasesへ接続できませんでした\nHTTP status: 403";
+    const checker = vi.fn<() => Promise<UpdateCheckResult>>().mockRejectedValueOnce(details);
+    const store = createUpdateCheckStore(checker);
+
+    await store.check();
+    expect(store.state).toEqual({ status: "error", details });
+
+    let resolve!: (result: UpdateCheckResult) => void;
+    checker.mockImplementationOnce(
+      () => new Promise<UpdateCheckResult>((done) => (resolve = done))
+    );
+    const retry = store.check({ force: true });
+    expect(store.state).toEqual({ status: "checking" });
+    resolve(available);
+    await retry;
+    expect(store.state).toMatchObject({ status: "available" });
+    expect(store.state).not.toHaveProperty("details");
   });
 });
