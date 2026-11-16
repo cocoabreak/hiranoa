@@ -6,7 +6,7 @@ export type ExternalImagePolicy = "block" | "ask" | "allow";
 
 import { defaultRendererSettings } from "$lib/plugins";
 import { i18n, resolveLocale, type LanguageSetting } from "$lib/i18n/index.svelte";
-import { validateMetadataFields, type MetadataDisplayField } from "$lib/metadata";
+import { validateMetadataFields, type MetadataDisplayField } from "$lib/metadata-settings";
 
 export interface Settings {
   language: LanguageSetting;

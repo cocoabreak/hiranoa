@@ -1,6 +1,9 @@
 import { parseFrontmatterYaml } from "$lib/markdown/frontmatter";
 import { resolveSourceRelativeMarkdownTarget } from "$lib/document-sources";
 import type { DocumentRef } from "$lib/types";
+import type { MetadataDisplayField } from "$lib/metadata-settings";
+export { validateMetadataFields } from "$lib/metadata-settings";
+export type { MetadataDisplayField } from "$lib/metadata-settings";
 
 export const MAX_METADATA_RESULTS = 200;
 export const MAX_SOURCES_PER_DOCUMENT = 64;
@@ -49,12 +52,6 @@ export interface MetadataFilter {
   operator: "exists" | "equals" | "contains";
   value: string;
 }
-export interface MetadataDisplayField {
-  key: string;
-  label: string;
-  values: Record<string, string>;
-}
-
 export function metadataDocument(candidate: MetadataCandidate): MetadataDocument {
   let data: Record<string, unknown> = {};
   let invalid = candidate.incomplete;
@@ -173,37 +170,6 @@ export function displayMetadataValue(value: unknown, field?: MetadataDisplayFiel
   return scalarValues(value)
     .map((entry) => (field && Object.hasOwn(field.values, entry) ? field.values[entry] : entry))
     .join(", ");
-}
-
-export function validateMetadataFields(value: unknown): MetadataDisplayField[] {
-  if (!Array.isArray(value) || value.length > 12) throw new Error("fields");
-  const keys = new Set<string>();
-  return value.map((item: unknown) => {
-    if (!item || typeof item !== "object") throw new Error("field");
-    const field = item as MetadataDisplayField;
-    if (
-      typeof field.key !== "string" ||
-      !field.key.trim() ||
-      field.key.length > 128 ||
-      typeof field.label !== "string" ||
-      field.label.length > 128
-    )
-      throw new Error("field");
-    if (keys.has(field.key)) throw new Error("duplicate");
-    keys.add(field.key);
-    const values = field.values ?? {};
-    if (
-      !values ||
-      typeof values !== "object" ||
-      Array.isArray(values) ||
-      Object.keys(values).length > 32 ||
-      Object.entries(values).some(
-        ([key, val]) => key.length > 128 || typeof val !== "string" || val.length > 128
-      )
-    )
-      throw new Error("values");
-    return { key: field.key, label: field.label, values: { ...values } };
-  });
 }
 
 export function sourceDocument(source: MetadataSource, sourceId: string): DocumentRef | null {
