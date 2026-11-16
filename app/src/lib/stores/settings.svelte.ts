@@ -6,6 +6,7 @@ export type ExternalImagePolicy = "block" | "ask" | "allow";
 
 import { defaultRendererSettings } from "$lib/plugins";
 import { i18n, resolveLocale, type LanguageSetting } from "$lib/i18n/index.svelte";
+import { validateMetadataFields, type MetadataDisplayField } from "$lib/metadata";
 
 export interface Settings {
   language: LanguageSetting;
@@ -27,6 +28,7 @@ export interface Settings {
   localFontsEnabled: boolean;
   externalImagePolicy: ExternalImagePolicy;
   checkForUpdatesOnStartup: boolean;
+  metadataDisplayFields: MetadataDisplayField[];
 }
 
 export const DEFAULT_SIDEBAR_WIDTH = 224;
@@ -74,6 +76,11 @@ const defaults: Settings = {
   localFontsEnabled: false,
   externalImagePolicy: "ask",
   checkForUpdatesOnStartup: true,
+  metadataDisplayFields: [
+    { key: "review_status", label: "", values: {} },
+    { key: "recorded_on", label: "", values: {} },
+    { key: "reviewed_on", label: "", values: {} },
+  ],
 };
 
 function createSettingsStore() {
@@ -151,6 +158,9 @@ function createSettingsStore() {
     },
     setCheckForUpdatesOnStartup(enabled: boolean) {
       settings = { ...settings, checkForUpdatesOnStartup: enabled };
+    },
+    setMetadataDisplayFields(fields: unknown) {
+      settings = { ...settings, metadataDisplayFields: validateMetadataFields(fields) };
     },
     /** 言語設定を変更し、実効ロケールをi18nに即時反映する */
     setLanguage(language: LanguageSetting) {

@@ -20,6 +20,8 @@ use tauri::{State, WebviewWindow};
 use super::search::{SearchMatch, SearchState};
 use super::window::{LinkGraphWindowState, LINK_GRAPH_WINDOW_LABEL, MAIN_WINDOW_LABEL};
 
+pub mod metadata;
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentRef {

@@ -19,6 +19,7 @@
   } from "$lib/local-fonts/local-fonts.svelte";
   import { focusTrap } from "$lib/actions/focus-trap";
   import { onMount } from "svelte";
+  import MetadataSettings from "./MetadataSettings.svelte";
 
   interface ShellIntegrationStatus {
     supported: boolean;
@@ -231,6 +232,7 @@
 
         <div aria-labelledby="settings-category-title">
           {#if activeCategory === "appearance"}
+            <MetadataSettings />
             <details open class="group border-b py-2 last:border-b-0">
               <summary
                 class="cursor-pointer py-2 text-xs font-semibold text-muted-foreground marker:text-muted-foreground"

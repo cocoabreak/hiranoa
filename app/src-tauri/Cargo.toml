@@ -5,7 +5,6 @@ description = "Hiranoa, a lightweight read-only Markdown viewer"
 authors = ["Hirofumi Akiyama"]
 license = "MIT"
 repository = "https://github.com/cocoabreak/hiranoa"
-homepage = "https://github.com/cocoabreak/hiranoa"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

@@ -73,6 +73,8 @@
     "allow-list-source-backlinks",
     "allow-get-source-link-context",
     "allow-get-source-reference-validation",
+    "allow-get-source-metadata-candidates",
+    "allow-inspect-source-metadata-targets",
     "allow-check-for-updates",
     "allow-set-native-theme",
     "allow-set-menu-language",

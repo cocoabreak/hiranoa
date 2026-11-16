@@ -102,7 +102,7 @@ Text with **bold**, [link](target.md), ![image](image.png), and \`code\`.
     ).toBe("Heading");
   });
 
-  it("巨大メタデータと抜粋を上限内へ切り詰める", () => {
+  it("上限を超えたYAMLはファイル名へフォールバックし抜粋を制限する", () => {
     const aliases = Array.from({ length: 100 }, (_, index) => `"${index}-${"a".repeat(300)}"`).join(
       ", "
     );
@@ -117,7 +117,7 @@ ${"body ".repeat(200)}
       null,
       true
     );
-    expect(Array.from(preview.title)).toHaveLength(256);
+    expect(preview.title).toBe("target.md");
     expect(preview.aliases.length).toBeLessThanOrEqual(32);
     expect(Array.from(preview.excerpt).length).toBeLessThanOrEqual(320);
     expect(preview.metadataTruncated).toBe(true);
