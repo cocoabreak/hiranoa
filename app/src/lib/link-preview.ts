@@ -186,7 +186,7 @@ export function extractLinkPreview(
     ...excerpt,
     aliases: metadata.aliases,
     tags: metadata.tags,
-    metadataTruncated: metadata.truncated,
+    metadataTruncated: metadata.truncated || frontmatter.invalid === true,
     contentTruncated,
   };
 }

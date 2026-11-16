@@ -39,6 +39,8 @@
   import SearchBar from "./SearchBar.svelte";
   import SafeModeView from "./SafeModeView.svelte";
   import SourceView from "./SourceView.svelte";
+  import MetadataSummary from "./MetadataSummary.svelte";
+  import { documentAnchorStore } from "$lib/stores/document-anchor.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
   import { protectExternalImages } from "$lib/markdown/external-images";
   import {
@@ -81,6 +83,26 @@
   let cleanupLocalImages: (() => void) | null = null;
   // ファイルを開いた後にスクロールするアンカー
   let pendingAnchor: string | null = null;
+  $effect(() => {
+    const request = documentAnchorStore.pending;
+    const document = activeTab?.document;
+    if (
+      !request ||
+      !document ||
+      request.key !== documentKey(document) ||
+      isLoading ||
+      !renderedHtml ||
+      !contentEl
+    )
+      return;
+    const key = request.key;
+    const anchor = request.anchor;
+    documentAnchorStore.consume(request.id);
+    requestAnimationFrame(() => {
+      if (activeTab?.document && documentKey(activeTab.document) === key)
+        scrollToAnchor(contentEl, anchor);
+    });
+  });
 
   const activeTab = $derived(tabStore.tabs.find((t) => t.id === tabStore.activeTabId));
   const activeContent = $derived(activeTab ? contentStore.get(activeTab.path) : undefined);
@@ -696,6 +718,9 @@
 </script>
 
 <div class="print-expand relative flex min-h-0 flex-1 flex-col">
+  {#if activeContent && !isLoading && !isSourceMode && !isSafeMode}
+    <MetadataSummary raw={activeContent.raw} />
+  {/if}
   {#if searchStore.open}
     {#if isSafeMode}
       <div class="flex items-center justify-between border-b px-3 py-2 text-sm" role="status">

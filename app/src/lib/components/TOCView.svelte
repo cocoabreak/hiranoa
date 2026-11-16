@@ -5,18 +5,12 @@
   import { tabStore } from "$lib/stores/tab.svelte";
   import { showHeadingReferenceMenu } from "$lib/actions/reference-menu";
   import type { TocHeading } from "$lib/types";
+  import MetadataTree from "./MetadataTree.svelte";
+  import MetadataSources from "./MetadataSources.svelte";
 
   let { onselect }: { onselect?: () => void } = $props();
 
   const m = $derived(i18n.m);
-
-  function formatValue(value: unknown): string {
-    return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
-  }
-
-  function isPrimitiveArray(value: unknown): value is (string | number)[] {
-    return Array.isArray(value) && value.every((v) => typeof v !== "object");
-  }
 
   function scrollTo(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
@@ -42,26 +36,10 @@
       <summary class="cursor-pointer text-xs font-semibold text-muted-foreground">
         {m.toc.metadata}
       </summary>
-      <dl class="mt-1 space-y-1">
-        {#each Object.entries(frontmatterStore.data) as [key, value] (key)}
-          <div class="text-xs">
-            <dt class="text-muted-foreground">{key}</dt>
-            <dd class="mt-0.5">
-              {#if isPrimitiveArray(value)}
-                <div class="flex flex-wrap gap-1">
-                  {#each value as item, i (i)}
-                    <span class="rounded-full bg-muted px-2 py-0.5">{String(item)}</span>
-                  {/each}
-                </div>
-              {:else}
-                <span class="break-words">{formatValue(value)}</span>
-              {/if}
-            </dd>
-          </div>
-        {/each}
-      </dl>
+      <div class="mt-2"><MetadataTree value={frontmatterStore.data} /></div>
     </details>
   {/if}
+  <MetadataSources />
   {#if tocStore.headings.length === 0}
     <p class="px-3 py-2 text-xs text-muted-foreground">{m.toc.emptyPrompt}</p>
   {:else}

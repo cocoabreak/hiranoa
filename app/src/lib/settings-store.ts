@@ -16,6 +16,13 @@ export async function loadSettings(): Promise<void> {
     if (saved) {
       // 既知のキーのみ適用（将来のキー追加に対して安全）
       const current = settingsStore.settings;
+      if (saved.metadataDisplayFields !== undefined) {
+        try {
+          settingsStore.setMetadataDisplayFields(saved.metadataDisplayFields);
+        } catch {
+          /* Keep safe defaults for invalid saved fields. */
+        }
+      }
       if (typeof saved.showHiddenFiles === "boolean") {
         if (saved.showHiddenFiles !== current.showHiddenFiles) {
           settingsStore.toggleHiddenFiles();

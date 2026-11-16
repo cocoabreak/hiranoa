@@ -66,6 +66,8 @@ fn main() {
             "list_source_backlinks",
             "get_source_link_context",
             "get_source_reference_validation",
+            "get_source_metadata_candidates",
+            "inspect_source_metadata_targets",
             "check_for_updates",
             "set_native_theme",
             "set_menu_language",
