@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 import type { TocHeading } from "$lib/types";
 import { headingBaseId, uniqueHeadingId } from "$lib/markdown/heading-anchor";
 
@@ -42,4 +43,4 @@ function createTocStore() {
   };
 }
 
-export const tocStore = createTocStore();
+export const tocStore = createPaneScopedStore(createTocStore);

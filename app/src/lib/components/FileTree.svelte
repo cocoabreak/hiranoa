@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { openOtherPaneLabel } from "$lib/pane-labels";
+
+  import { captureOpenTarget, captureOtherTarget } from "$lib/actions/workspace-actions";
   import { explorerStore } from "$lib/stores/explorer.svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import { openSourceMarkdown } from "$lib/actions/file-actions";
@@ -15,25 +18,40 @@
 
   import { Menu, MenuItem } from "@tauri-apps/api/menu";
 
-  async function handleFileClick(entry: FileEntry) {
+  async function handleFileClick(entry: FileEntry, other = false) {
+    const target = other ? captureOtherTarget() : captureOpenTarget();
     try {
       const source = explorerStore.source;
       if (!source) throw new Error("ドキュメントソースが見つかりません");
-      await openSourceMarkdown(entry.document, source);
+      await openSourceMarkdown(entry.document, source, undefined, target);
     } catch (err) {
       alert(m.dialog.openFileFailed(entry.path, err));
     }
   }
 
-  async function handleContextMenu(e: MouseEvent, path: string) {
+  async function handleContextMenu(e: MouseEvent, entry: FileEntry) {
+    const source = explorerStore.source;
+    if (!source) return;
+    const path = nativeDocumentPath(source, entry.document);
     e.preventDefault();
     try {
       const menu = await Menu.new({
         items: [
           await MenuItem.new({
-            text: m.contextMenu.openExternalEditor,
-            action: () => openExternalEditor(path),
+            text: openOtherPaneLabel(),
+            action: () => {
+              const target = captureOtherTarget();
+              void openSourceMarkdown(entry.document, source, undefined, target);
+            },
           }),
+          ...(path && source.capabilities.externalEditor
+            ? [
+                await MenuItem.new({
+                  text: m.contextMenu.openExternalEditor,
+                  action: () => openExternalEditor(path),
+                }),
+              ]
+            : []),
         ],
       });
       await menu.popup();
@@ -78,14 +96,8 @@
     <button
       class="flex w-full items-center rounded py-0.5 text-left text-xs hover:bg-accent hover:text-accent-foreground"
       style="padding-left: {depth * 12 + 22}px; padding-right: 8px"
-      onclick={() => handleFileClick(entry)}
-      oncontextmenu={(e) => {
-        const source = explorerStore.source;
-        if (source?.capabilities.externalEditor) {
-          const path = nativeDocumentPath(source, entry.document);
-          if (path) handleContextMenu(e, path);
-        }
-      }}
+      onclick={(event) => handleFileClick(entry, event.shiftKey)}
+      oncontextmenu={(e) => handleContextMenu(e, entry)}
     >
       <span class="truncate">{entry.name}</span>
     </button>

@@ -18,11 +18,12 @@ const CONTEXT_CHARS = 80;
 export async function buildSearchResults(
   raw: string,
   query: string,
-  useRegex: boolean
+  useRegex: boolean,
+  signal?: AbortSignal
 ): Promise<SearchResultList> {
   if (!query) return { items: [], error: null, truncated: false };
   const lines = raw.split(/\r?\n/);
-  const result = await findTextMatches(lines, query, useRegex, MAX_SEARCH_MATCHES);
+  const result = await findTextMatches(lines, query, useRegex, MAX_SEARCH_MATCHES, signal);
   if (result.error) return { items: [], error: result.error, truncated: false };
 
   const items: SearchResultItem[] = [];

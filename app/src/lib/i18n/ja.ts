@@ -5,6 +5,19 @@
  * （各プラグインが自分のディレクトリ内で保持する。plugins/README.md参照）。
  */
 export const ja = {
+  split: {
+    split: "左右に分割",
+    unsplit: "分割を解除",
+    focus: "操作するペインを切り替え",
+    left: "左ペイン",
+    right: "右ペイン",
+    resize: "分割位置を変更",
+    splitOpenRight: "右側に分割して開く",
+    openLeft: "左側で開く",
+    openRight: "右側で開く",
+    moveLeft: "タブを左側へ移動",
+    moveRight: "タブを右側へ移動",
+  },
   metadata: {
     keysLimited: "属性名の候補を一部省略しています。属性名は直接入力できます。",
     title: "メタデータ",

@@ -1,4 +1,9 @@
 export const keymap: Record<string, string> = {
+  "Ctrl+\\": "view.split",
+  "Ctrl+Shift+\\": "view.unsplit",
+  "Ctrl+Shift+|": "view.unsplit",
+  "Ctrl+Alt+ArrowRight": "view.focusOther",
+  "Ctrl+Alt+ArrowLeft": "view.focusOther",
   "Ctrl+O": "file.open",
   "Ctrl+Shift+O": "file.openFolder",
   "Ctrl+W": "tab.close",

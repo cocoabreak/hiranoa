@@ -1,4 +1,10 @@
 <script lang="ts">
+  import {
+    captureOpenTarget,
+    captureOtherTarget,
+    navigateOpenedAnchor,
+  } from "$lib/actions/workspace-actions";
+  import { showOpenOtherMenu } from "$lib/actions/open-other-menu";
   import { untrack } from "svelte";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { openSourceMarkdown } from "$lib/actions/file-actions";
@@ -7,7 +13,6 @@
   import { linkInspectorStore } from "$lib/stores/links.svelte";
   import { linkPreviewStore } from "$lib/stores/link-preview.svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
-  import { documentAnchorStore } from "$lib/stores/document-anchor.svelte";
   import { contentStore } from "$lib/stores/content.svelte";
   import { extractFrontmatter } from "$lib/markdown/frontmatter";
   import { sourceDocument, MAX_METADATA_RESULTS, type MetadataSource } from "$lib/metadata";
@@ -98,24 +103,35 @@
       await metadataStore.load(tab.source, linkInspectorStore.revision, true);
     }
   }
-  async function open(edge: MetadataSource) {
+  async function open(edge: MetadataSource, other = false) {
+    const openTarget = other ? captureOtherTarget() : captureOpenTarget();
     if (!tab?.source) return;
     error = null;
     try {
       if (edge.status === "external") await openUrl(edge.raw);
       else {
         const target = sourceDocument(edge, tab.source.id);
-        if (target && (await openSourceMarkdown(target, tab.source)) && edge.anchor)
-          documentAnchorStore.navigate(target, edge.anchor);
+        if (
+          target &&
+          (await openSourceMarkdown(target, tab.source, undefined, openTarget)) &&
+          edge.anchor
+        )
+          navigateOpenedAnchor(openTarget, edge.anchor);
       }
     } catch (cause) {
       error = String(cause);
     }
   }
-  async function openIncoming(path: string) {
+  async function openIncoming(path: string, other = false) {
+    const openTarget = other ? captureOtherTarget() : captureOpenTarget();
     if (!tab?.source) return;
     try {
-      await openSourceMarkdown({ sourceId: tab.source.id, path }, tab.source);
+      await openSourceMarkdown(
+        { sourceId: tab.source.id, path },
+        tab.source,
+        undefined,
+        openTarget
+      );
     } catch (cause) {
       error = String(cause);
     }
@@ -171,11 +187,16 @@
               <button
                 type="button"
                 class="text-left hover:underline"
-                onclick={() => open(edge)}
+                onclick={(event) => open(edge, event.shiftKey)}
+                oncontextmenu={(event) => {
+                  if (edge.status === "ready")
+                    void showOpenOtherMenu(event, () => open(edge, true));
+                }}
                 onmouseenter={(event) => preview(event, edge)}
-                onmouseleave={() => linkPreviewStore.hide()}
+                onmouseleave={(event) => linkPreviewStore.hideFromOrigin(event.currentTarget)}
                 onfocus={(event) => preview(event, edge)}
-                onblur={() => linkPreviewStore.hide()}>{edge.raw}</button
+                onblur={(event) => linkPreviewStore.hideFromOrigin(event.currentTarget)}
+                >{edge.raw}</button
               >
             {:else}<span>{edge.raw}</span>{/if}
           </div>
@@ -189,7 +210,8 @@
           <button
             type="button"
             class="block w-full break-words text-left hover:underline"
-            onclick={() => openIncoming(path)}
+            onclick={(event) => openIncoming(path, event.shiftKey)}
+            oncontextmenu={(event) => showOpenOtherMenu(event, () => openIncoming(path, true))}
             >{metadataStore.documents.find((entry) => entry.path === path)?.title || path}<span
               class="block text-muted-foreground">{path}</span
             ></button

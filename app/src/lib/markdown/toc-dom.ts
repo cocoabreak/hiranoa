@@ -1,3 +1,4 @@
+import { logicalElementId } from "./view-dom";
 import type { TocHeading } from "$lib/types";
 import {
   decodeHeadingAnchor,
@@ -35,6 +36,7 @@ export function buildToc(container: HTMLElement): TocHeading[] {
     const level = parseInt(el.tagName[1]);
     const text = el.textContent?.trim() ?? "";
 
+    if (el.id) el.id = logicalElementId(el);
     if (!el.id) {
       el.id = uniqueHeadingId(headingBaseId(headingAnchorText(el), i), usedIds);
     } else if (usedIds.has(el.id)) {
@@ -54,7 +56,11 @@ export function scrollToAnchor(contentEl: HTMLElement, hash: string): void {
   const decodedHash = decodeHeadingAnchor(hash);
   // 1. 完全一致
   try {
-    const el = contentEl.querySelector(`#${CSS.escape(decodedHash)}`);
+    const el =
+      contentEl.querySelector(`#${CSS.escape(decodedHash)}`) ??
+      [...contentEl.querySelectorAll("[data-logical-id]")].find(
+        (el) => logicalElementId(el) === decodedHash
+      );
     if (el) {
       el.scrollIntoView({ behavior: "smooth" });
       return;
@@ -78,7 +84,7 @@ export function scrollToAnchor(contentEl: HTMLElement, hash: string): void {
   // 3. 見出しテキストのノーマライズ比較
   const headings = contentEl.querySelectorAll<HTMLElement>("h1,h2,h3,h4,h5,h6");
   for (const h of headings) {
-    if (headingReferenceMatches(decodedHash, h.id, headingAnchorText(h))) {
+    if (headingReferenceMatches(decodedHash, logicalElementId(h), headingAnchorText(h))) {
       h.scrollIntoView({ behavior: "smooth" });
       return;
     }

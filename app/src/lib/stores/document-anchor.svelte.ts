@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 import { documentKey } from "$lib/document-sources";
 import type { DocumentRef } from "$lib/types";
 
@@ -16,4 +17,4 @@ function createDocumentAnchorStore() {
     },
   };
 }
-export const documentAnchorStore = createDocumentAnchorStore();
+export const documentAnchorStore = createPaneScopedStore(createDocumentAnchorStore);

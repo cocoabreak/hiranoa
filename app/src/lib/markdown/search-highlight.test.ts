@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { applyHighlights, clearHighlights } from "./search-highlight";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { applyHighlights, clearHighlights, findTextMatches } from "./search-highlight";
 
 describe("applyHighlights", () => {
   let container: HTMLElement;
@@ -91,5 +91,33 @@ describe("clearHighlights", () => {
 
     expect(marks).toHaveLength(1);
     expect(marks[0].textContent).toBe("world");
+  });
+});
+
+describe("per-view regex cancellation", () => {
+  it("片側のキャンセルがそのWorkerだけを終了する", async () => {
+    const workers: { terminate: ReturnType<typeof vi.fn> }[] = [];
+    class TestWorker {
+      terminate = vi.fn();
+      postMessage = vi.fn();
+      constructor() {
+        workers.push(this);
+      }
+    }
+    vi.stubGlobal("Worker", TestWorker);
+    try {
+      const left = new AbortController();
+      const right = new AbortController();
+      const a = findTextMatches(["left"], "left", true, 500, left.signal);
+      const b = findTextMatches(["right"], "right", true, 500, right.signal);
+      left.abort();
+      await a;
+      expect(workers[0].terminate).toHaveBeenCalledOnce();
+      expect(workers[1].terminate).not.toHaveBeenCalled();
+      right.abort();
+      await b;
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

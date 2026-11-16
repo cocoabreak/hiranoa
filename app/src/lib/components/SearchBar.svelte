@@ -1,6 +1,11 @@
 <script lang="ts">
-  import { searchStore } from "$lib/stores/search.svelte";
+  import { searchStore as sharedsearchStore } from "$lib/stores/search.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
+
+  import { workspaceStore } from "$lib/stores/workspace.svelte";
+  import { untrack } from "svelte";
+  let { paneId = workspaceStore.activePaneId }: { paneId?: string } = $props();
+  const searchStore = untrack(() => sharedsearchStore.forPane(paneId));
 
   const m = $derived(i18n.m);
 
@@ -10,6 +15,7 @@
   let resultsExpanded = $state(true);
 
   $effect(() => {
+    if (workspaceStore.activePaneId !== paneId) return;
     inputEl?.focus();
     inputEl?.select();
   });

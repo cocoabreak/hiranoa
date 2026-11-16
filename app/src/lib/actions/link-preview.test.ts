@@ -6,6 +6,67 @@ describe("setupLinkPreviewTrigger", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("片側の購読解除で他方のプレビューを閉じない", () => {
+    const store = new LinkPreviewStore();
+    const left = document.createElement("main");
+    const right = document.createElement("main");
+    left.className = right.className = "markdown-body";
+    const origin = document.createElement("a");
+    const previous = document.createElement("a");
+    left.append(previous);
+    right.append(origin);
+    const cleanup = setupLinkPreviewTrigger(left, {
+      current: { sourceId: "source", path: "a.md" },
+      sourceGeneration: 1,
+      store,
+    });
+    store.beginPending(
+      "previous",
+      () => ({ top: 0, left: 0, right: 1, bottom: 1, width: 1, height: 1 }),
+      previous
+    );
+    store.beginMissing(
+      "pending",
+      () => ({ top: 0, left: 0, right: 1, bottom: 1, width: 1, height: 1 }),
+      450,
+      origin
+    );
+    cleanup();
+    expect(store.status).toBe("waiting");
+    store.closeFrom(right);
+    expect(store.status).toBe("idle");
+  });
+
+  it("他方のリンクへフォーカス後、元のリンクを離れても新しいプレビューを閉じない", async () => {
+    const store = new LinkPreviewStore(async () => ({
+      status: "ready",
+      rawPrefix: "# Right",
+      byteSize: 7,
+      truncated: false,
+      sourceGeneration: 1,
+    }));
+    const left = document.createElement("main");
+    const right = document.createElement("main");
+    left.className = right.className = "markdown-body";
+    document.body.append(left, right);
+    left.innerHTML = '<a href="left.md">left</a>';
+    right.innerHTML = '<a href="right.md">right</a>';
+    const context = { current: { sourceId: "source", path: "a.md" }, sourceGeneration: 1, store };
+    const cleanLeft = setupLinkPreviewTrigger(left, context);
+    const cleanRight = setupLinkPreviewTrigger(right, context);
+    left.querySelector("a")!.dispatchEvent(new PointerEvent("pointerover", { bubbles: true }));
+    right.querySelector("a")!.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    left.querySelector("a")!.dispatchEvent(new PointerEvent("pointerout", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(store.status).toBe("ready");
+    expect(store.path).toBe("right.md");
+    cleanLeft();
+    cleanRight();
+    store.close();
+    left.remove();
+    right.remove();
+  });
+
   it("同一Source内Markdownリンクを遅延読込する", async () => {
     const reader = vi.fn(async (): Promise<LinkPreviewReadResponse> => ({
       status: "ready",

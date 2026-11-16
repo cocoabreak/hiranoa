@@ -1,3 +1,5 @@
+import { buildToc } from "$lib/markdown/toc-dom";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { message } from "@tauri-apps/plugin-dialog";
 import { i18n } from "$lib/i18n/index.svelte";
@@ -32,10 +34,11 @@ export function validatePngDimensions(width: number, height: number): void {
  * 「PDFとして保存」を選べる）。印刷前に各プラグインのbeforePrintを待ち、
  * 遅延レンダリング中の要素（画面外のMermaid図等）を完了させる。
  */
-export async function printDocument() {
-  const activeTab = tabStore.tabs.find((t) => t.id === tabStore.activeTabId);
-  const container = document.querySelector<HTMLElement>(".markdown-body");
-  if (!activeTab?.path || !container) return;
+export async function printDocument(container = workspaceStore.root(), expectedTabId?: string) {
+  const pane = container?.closest<HTMLElement>("[data-pane-id]");
+  const tabs = tabStore.forPane(pane?.dataset.paneId ?? workspaceStore.activePaneId);
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.activeTabId);
+  if (!activeTab?.path || !container || (expectedTabId && activeTab.id !== expectedTabId)) return;
 
   const context: PostRenderContext = {
     document: activeTab.document ?? null,
@@ -58,6 +61,7 @@ export async function printDocument() {
     }
   }
   await waitForLocalFonts();
+  if (!container.isConnected || tabs.activeTabId !== activeTab.id) return;
 
   // ダークテーマのまま印刷すると白背景に薄色文字で読めなくなるため、
   // 印刷プレビューの間だけライトテーマへ切り替える（window.print()は
@@ -65,9 +69,13 @@ export async function printDocument() {
   const root = document.documentElement;
   const wasDark = root.classList.contains("dark");
   if (wasDark) root.classList.remove("dark");
+  pane?.classList.add("print-target");
+  document.body.classList.add("printing-pane");
   try {
     window.print();
   } finally {
+    pane?.classList.remove("print-target");
+    document.body.classList.remove("printing-pane");
     if (wasDark) root.classList.add("dark");
   }
 }
@@ -87,6 +95,10 @@ export async function saveAsHtml(title: string, renderedHtml: string) {
     // エクスポート先HTMLにスクリプト注入されうるためエスケープする（renderedHtmlは
     // レンダリング時にDOMPurifyでサニタイズ済み）。
     const safeTitle = escapeHtml(title);
+    const canonical = document.createElement("div");
+    canonical.innerHTML = renderedHtml;
+    buildToc(canonical);
+    renderedHtml = canonical.innerHTML;
     const htmlContent = `<!DOCTYPE html>
 <html lang="ja">
 <head>

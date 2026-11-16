@@ -1,3 +1,13 @@
+import { captureOpenTarget, type OpenTarget } from "./workspace-actions";
+import { MAX_WORKSPACE_TABS, workspaceStore } from "$lib/stores/workspace.svelte";
+import {
+  retainPendingSource,
+  retainPendingPath,
+  hasPendingPath,
+  hasPendingSource,
+  reconcileDocumentResource,
+} from "$lib/document-resources";
+import { explorerStore } from "$lib/stores/explorer.svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { tabStore } from "$lib/stores/tab.svelte";
@@ -74,9 +84,12 @@ export async function approveLargeMarkdownFullRender(path: string): Promise<bool
  * 信頼登録は明示的な操作（フォルダ/ファイルを開く、リンク先の信頼確認）でのみ行うことで、
  * 悪意あるリンク経由でopenMarkdownFileが呼ばれても勝手に信頼範囲を広げないようにする。
  */
-export async function openMarkdownFile(path: string): Promise<boolean> {
+export async function openMarkdownFile(
+  path: string,
+  target = captureOpenTarget()
+): Promise<boolean> {
   const [source, document] = await registerNativeDocument(path);
-  return openSourceMarkdown(document, source);
+  return openSourceMarkdown(document, source, undefined, target);
 }
 
 export async function openLargeMarkdownInSafeModeForE2e(path: string): Promise<boolean> {
@@ -88,61 +101,112 @@ export async function openLargeMarkdownInSafeModeForE2e(path: string): Promise<b
 export async function openSourceMarkdown(
   document: DocumentRef,
   source: DocumentSourceInfo,
-  confirm?: LargeMarkdownConfirm
+  confirm?: LargeMarkdownConfirm,
+  target: OpenTarget = captureOpenTarget()
 ): Promise<boolean> {
-  const key = documentKey(document);
-  const displayPath = displayDocumentPath(source, document);
-  const title = basename(document.path);
-  let loaded: LoadedMarkdown;
+  const release = retainPendingSource(source.id);
+  const nativePath = nativeDocumentPath(source, document);
+  const watchPath =
+    nativePath ?? (source.capabilities.watch === "container" ? source.nativePath : null);
+  const releasePath = watchPath ? retainPendingPath(watchPath) : () => {};
+  const isUsed = () =>
+    nativePath
+      ? hasPendingPath(nativePath) ||
+        tabStore.allTabs.some(
+          (tab) =>
+            !!tab.document &&
+            !!tab.source &&
+            nativeDocumentIdentity(tab.source, tab.document) ===
+              nativeDocumentIdentity(source, document)
+        )
+      : hasPendingSource(source.id) ||
+        explorerStore.source?.id === source.id ||
+        tabStore.allTabs.some((tab) => tab.source?.id === source.id);
   try {
-    const result = await readSourceMarkdown(document, key, {}, confirm);
-    if (result === undefined) return false;
-    loaded = result;
-  } catch (err) {
-    throw new Error(`ファイルを開けませんでした: ${displayPath}`, { cause: err });
-  }
-  const nativeIdentity = nativeDocumentIdentity(source, document);
-  const existing = tabStore.tabs.find((tab) => {
-    if (tab.path === key) return true;
-    if (!nativeIdentity || !tab.document || !tab.source) return false;
-    return nativeDocumentIdentity(tab.source, tab.document) === nativeIdentity;
-  });
-  const tabKey = existing?.path ?? key;
-  if (!existing || existing.path === key) rememberDocument(document, source);
-  contentStore.set(tabKey, {
-    raw: loaded.raw,
-    safeOutline: loaded.safeOutline,
-    safeOutlineTruncated: loaded.safeOutlineTruncated,
-  });
-
-  const isNew = !existing;
-  if (existing) {
-    tabStore.updateTab(existing.id, { renderMode: loaded.renderMode, status: "ok" });
-    tabStore.setActive(existing.id);
-  } else {
-    tabStore.addOrActivate({
-      id: crypto.randomUUID(),
-      path: key,
-      document,
-      source,
-      displayPath,
-      title,
-      renderMode: loaded.renderMode,
+    const key = documentKey(document);
+    const displayPath = displayDocumentPath(source, document);
+    const title = basename(document.path);
+    let loaded: LoadedMarkdown;
+    try {
+      const result = await readSourceMarkdown(document, key, {}, confirm);
+      if (result === undefined) return false;
+      loaded = result;
+    } catch (err) {
+      throw new Error(`ファイルを開けませんでした: ${displayPath}`, { cause: err });
+    }
+    if (!target.valid()) return false;
+    if (
+      tabStore.allTabs.length >= MAX_WORKSPACE_TABS &&
+      (!target.paneId ||
+        !tabStore
+          .forPane(target.paneId)
+          .tabs.some(
+            (tab) =>
+              tab.path === key ||
+              (tab.document &&
+                tab.source &&
+                nativeDocumentIdentity(tab.source, tab.document) !== null &&
+                nativeDocumentIdentity(tab.source, tab.document) ===
+                  nativeDocumentIdentity(source, document))
+          ))
+    )
+      return false;
+    const paneId = target.commit();
+    if (!paneId) return false;
+    const tabs = tabStore.forPane(paneId);
+    const nativeIdentity = nativeDocumentIdentity(source, document);
+    const existing = tabs.tabs.find((tab) => {
+      if (tab.path === key) return true;
+      if (!nativeIdentity || !tab.document || !tab.source) return false;
+      return nativeDocumentIdentity(tab.source, tab.document) === nativeIdentity;
     });
-  }
+    const tabKey = existing?.path ?? key;
+    if (!existing || existing.path === key) rememberDocument(document, source);
+    contentStore.set(tabKey, {
+      raw: loaded.raw,
+      safeOutline: loaded.safeOutline,
+      safeOutlineTruncated: loaded.safeOutlineTruncated,
+    });
 
-  if (isNew) {
-    const nativePath = nativeDocumentPath(source, document);
-    const watchPath =
-      nativePath ?? (source.capabilities.watch === "container" ? source.nativePath : null);
-    if (watchPath) await invoke("watch_path", { path: watchPath });
-  }
+    const isNew = !existing;
+    if (existing) {
+      tabs.updateTab(existing.id, { renderMode: loaded.renderMode, status: "ok" });
+      tabs.setActive(existing.id, false);
+    } else {
+      tabs.addOrActivate({
+        id: crypto.randomUUID(),
+        path: key,
+        document,
+        source,
+        displayPath,
+        title,
+        renderMode: loaded.renderMode,
+      });
+    }
 
-  if (source.kind === "native") {
-    recentStore.addFile(displayPath);
-    void saveRecent();
+    if (isNew) {
+      if (watchPath) await reconcileDocumentResource(watchPath, isUsed);
+    }
+
+    if (source.kind === "native") {
+      recentStore.addFile(displayPath);
+      void saveRecent();
+    }
+    return (
+      target.valid() &&
+      workspaceStore.hasPane(paneId) &&
+      tabs.tabs.some((tab) => tab.id === tabs.activeTabId && tab.path === tabKey)
+    );
+  } finally {
+    releasePath();
+    release();
+    if (watchPath && !isUsed())
+      await reconcileDocumentResource(
+        watchPath,
+        isUsed,
+        source.kind === "zip" ? source.id : undefined
+      );
   }
-  return true;
 }
 
 /** ローカルリンクの相対パスを現在ファイルのパスを基準に解決する */

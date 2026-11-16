@@ -1,3 +1,5 @@
+import { captureOpenTarget } from "./workspace-actions";
+import { hasPendingSource, reconcileDocumentResource } from "$lib/document-resources";
 import { invoke } from "@tauri-apps/api/core";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { settingsStore } from "$lib/stores/settings.svelte";
@@ -18,19 +20,27 @@ import {
 import type { DocumentSourceInfo } from "$lib/types";
 
 async function releaseArchiveSource(source: DocumentSourceInfo | null): Promise<void> {
-  if (source?.kind !== "zip" || tabStore.tabs.some((tab) => tab.source?.id === source.id)) return;
-  await invoke("unwatch_path", { path: source.nativePath }).catch(() => {});
-  await invoke("unregister_source", { sourceId: source.id }).catch(() => {});
+  if (source?.kind !== "zip" || tabStore.allTabs.some((tab) => tab.source?.id === source.id))
+    return;
+  await reconcileDocumentResource(
+    source.nativePath,
+    () =>
+      hasPendingSource(source.id) ||
+      explorerStore.source?.id === source.id ||
+      tabStore.allTabs.some((tab) => tab.source?.id === source.id),
+    source.id
+  );
 }
 
 /** ファイル選択ダイアログを開き、選択されたMarkdownファイルをタブで開く */
 export async function openFileDialog(): Promise<void> {
+  const target = captureOpenTarget();
   let selectedPath = "";
   try {
     const path = await invoke<string | null>("pick_markdown_file");
     if (!path) return;
     selectedPath = path;
-    await openMarkdownFile(path);
+    await openMarkdownFile(path, target);
     // 明示的にファイルを開いたら、前回セッションの復元プロンプトは閉じる
     sessionRestorePromptStore.hide();
   } catch (err) {
@@ -66,7 +76,7 @@ export async function openArchive(path: string): Promise<boolean> {
   const previousSource = explorerStore.source;
   const source = await registerZipSource(path);
   const tree = await listSourceEntries(rootDocument(source), false);
-  for (const tab of tabStore.tabs.filter((tab) => tab.source?.id === source.id)) {
+  for (const tab of tabStore.allTabs.filter((tab) => tab.source?.id === source.id)) {
     tabStore.updateTab(tab.id, { source });
   }
   explorerStore.setRoot(path, tree, source);

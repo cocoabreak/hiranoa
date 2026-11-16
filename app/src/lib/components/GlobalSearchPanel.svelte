@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { showOpenOtherMenu } from "$lib/actions/open-other-menu";
   import { globalSearchStore } from "$lib/stores/global-search.svelte";
   import { Search, Loader2 } from "@lucide/svelte";
   import { onMount, tick } from "svelte";
@@ -155,7 +156,12 @@
                   <li>
                     <button
                       class="w-full flex items-start gap-2 rounded-sm px-1 py-1 text-left hover:bg-accent hover:text-accent-foreground"
-                      onclick={() => globalSearchStore.openMatch(result, match.line_number)}
+                      onclick={(event) =>
+                        globalSearchStore.openMatch(result, match.line_number, event.shiftKey)}
+                      oncontextmenu={(event) =>
+                        showOpenOtherMenu(event, () =>
+                          globalSearchStore.openMatch(result, match.line_number, true)
+                        )}
                     >
                       <span class="mt-0.5 shrink-0 text-[10px] text-muted-foreground opacity-70">
                         {match.line_number}

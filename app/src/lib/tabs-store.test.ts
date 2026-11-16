@@ -25,6 +25,7 @@ import { authorizePath } from "$lib/actions/security";
 import { openMarkdownFile } from "$lib/actions/file-actions";
 import { restoreExpandedDirectories } from "$lib/actions/explorer-actions";
 import {
+  loadTabsOnStartup,
   discardSavedTabs,
   flushTabs,
   restoredActiveTabId,
@@ -32,6 +33,7 @@ import {
   saveAndFlushTabs,
   saveTabs,
 } from "$lib/tabs-store";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { searchStore } from "$lib/stores/search.svelte";
@@ -44,7 +46,7 @@ const mockedOpenFolder = vi.mocked(openFolder);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  for (const tab of [...tabStore.tabs]) {
+  for (const tab of [...tabStore.allTabs]) {
     if (tab.pinned) tabStore.togglePin(tab.id);
     tabStore.close(tab.id);
   }
@@ -82,8 +84,15 @@ describe("tabs session persistence", () => {
       kind: "tabs",
       value: expect.objectContaining({
         expandedDirs: ["docs"],
-        search: { open: true, query: "needle", useRegex: true },
-        tabs: [expect.objectContaining({ scrollPositions: { rendered: 320 } })],
+        schemaVersion: 2,
+        workspace: expect.objectContaining({
+          panes: [
+            expect.objectContaining({
+              search: { open: true, query: "needle", useRegex: true },
+              tabs: [expect.objectContaining({ scrollPositions: { rendered: 320 } })],
+            }),
+          ],
+        }),
       }),
     });
   });
@@ -166,8 +175,100 @@ describe("tabs session persistence", () => {
     expect(mockedInvoke).toHaveBeenCalledWith("save_app_state", {
       kind: "tabs",
       value: expect.objectContaining({
-        tabs: [expect.objectContaining({ scrollPositions: { rendered: 640 } })],
+        workspace: expect.objectContaining({
+          panes: [
+            expect.objectContaining({
+              tabs: [expect.objectContaining({ scrollPositions: { rendered: 640 } })],
+            }),
+          ],
+        }),
       }),
     });
+  });
+});
+
+describe("split session restoration", () => {
+  it("左側の全ファイルが失敗しても右側だけを残す", async () => {
+    mockedInvoke.mockResolvedValue({
+      schemaVersion: 2,
+      workspace: {
+        panes: [
+          { tabs: [{ path: "D:/notes/missing.md", pinned: false }], activeIndex: 0 },
+          {
+            tabs: [{ path: "D:/notes/right.md", pinned: false, viewMode: "source" }],
+            activeIndex: 0,
+            search: { open: false, query: "right", useRegex: false },
+          },
+        ],
+        activePaneIndex: 1,
+        splitRatio: 0.6,
+      },
+    });
+    mockedAuthorizePath.mockResolvedValue(true);
+    mockedOpenMarkdownFile.mockImplementation(async (path, target) => {
+      if (path.includes("missing")) return false;
+      tabStore.forPane(target!.paneId!).addOrActivate({ id: "right", path, title: "right.md" });
+      return true;
+    });
+    await restoreSavedTabs();
+    expect(workspaceStore.paneIds).toHaveLength(1);
+    expect(tabStore.tabs[0]).toMatchObject({ id: "right", viewMode: "source" });
+    expect(searchStore.query).toBe("right");
+  });
+  it("左右の同じ文書を別の表示として復元する", async () => {
+    mockedInvoke.mockResolvedValue({
+      schemaVersion: 2,
+      workspace: {
+        panes: [
+          { tabs: [{ path: "D:/notes/a.md", pinned: false }], activeIndex: 0 },
+          { tabs: [{ path: "D:/notes/a.md", pinned: false, viewMode: "source" }], activeIndex: 0 },
+        ],
+        activePaneIndex: 0,
+        splitRatio: 0.4,
+      },
+    });
+    mockedAuthorizePath.mockResolvedValue(true);
+    let next = 0;
+    mockedOpenMarkdownFile.mockImplementation(async (path, target) => {
+      tabStore
+        .forPane(target!.paneId!)
+        .addOrActivate({ id: "view-" + next++, path, title: "a.md" });
+      return true;
+    });
+    await restoreSavedTabs();
+    expect(workspaceStore.paneIds).toHaveLength(2);
+    expect(tabStore.allTabs).toHaveLength(2);
+    expect(tabStore.allTabs.map((tab) => tab.viewMode)).toEqual(["rendered", "source"]);
+    expect(workspaceStore.splitRatio).toBe(0.4);
+  });
+});
+
+describe("restore save guard", () => {
+  it("復元途中は明示flushでも空や部分状態を保存しない", async () => {
+    let finish!: (value: unknown) => void;
+    mockedInvoke.mockImplementation((command) =>
+      command === "load_app_state"
+        ? new Promise((resolve) => {
+            finish = resolve;
+          })
+        : Promise.resolve(undefined)
+    );
+    const restoring = restoreSavedTabs();
+    await saveAndFlushTabs();
+    expect(
+      mockedInvoke.mock.calls.filter(([command]) => command === "save_app_state")
+    ).toHaveLength(0);
+    finish({ tabs: [] });
+    await restoring;
+  });
+  it("リロードでも将来版セッションは確認前に破棄しない", async () => {
+    mockedInvoke.mockImplementation(async (command) =>
+      command === "is_fresh_launch" ? false : { schemaVersion: 3 }
+    );
+    expect(await loadTabsOnStartup()).toEqual({ promptRestore: true });
+    expect(mockedAuthorizePath).not.toHaveBeenCalled();
+    expect(
+      mockedInvoke.mock.calls.filter(([command]) => command === "save_app_state")
+    ).toHaveLength(0);
   });
 });

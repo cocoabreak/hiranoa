@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { captureOpenTarget, captureOtherTarget } from "$lib/actions/workspace-actions";
+  import { showOpenOtherMenu } from "$lib/actions/open-other-menu";
   import { untrack } from "svelte";
   import { metadataStore } from "$lib/stores/metadata.svelte";
   import { explorerStore } from "$lib/stores/explorer.svelte";
@@ -42,12 +44,18 @@
     if (explorerStore.source)
       void metadataStore.load(explorerStore.source, linkInspectorStore.revision, true);
   }
-  async function open(document: MetadataDocument) {
+  async function open(document: MetadataDocument, other = false) {
+    const openTarget = other ? captureOtherTarget() : captureOpenTarget();
     const source = explorerStore.source;
     if (!source || !sameSource) return;
     try {
       openError = "";
-      await openSourceMarkdown({ sourceId: source.id, path: document.path }, source);
+      await openSourceMarkdown(
+        { sourceId: source.id, path: document.path },
+        source,
+        undefined,
+        openTarget
+      );
     } catch (error) {
       openError = String(error);
     }
@@ -157,7 +165,8 @@
         <button
           type="button"
           class="block w-full space-y-1 rounded border p-2 text-left hover:bg-accent"
-          onclick={() => open(document)}
+          onclick={(event) => open(document, event.shiftKey)}
+          oncontextmenu={(event) => showOpenOtherMenu(event, () => open(document, true))}
         >
           <span class="block break-words font-medium">{document.title}</span>
           <span class="block break-words text-muted-foreground">{document.path}</span>

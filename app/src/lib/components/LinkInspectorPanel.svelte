@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { captureOpenTarget, captureOtherTarget } from "$lib/actions/workspace-actions";
+  import { showOpenOtherMenu } from "$lib/actions/open-other-menu";
   import { AlertTriangle, Loader2, Network, RefreshCw } from "@lucide/svelte";
   import {
     linkInspectorStore,
@@ -57,10 +59,14 @@
     return edge.target?.path ?? edge.rawTarget ?? "";
   }
 
-  function open(edge: DocumentLinkEdge) {
+  function open(edge: DocumentLinkEdge, other = false) {
     if (!activeTab?.source) return;
     const document = activeSection === "incoming" ? edge.source : edge.target;
-    void linkInspectorStore.openDocument(document, activeTab.source);
+    void linkInspectorStore.openDocument(
+      document,
+      activeTab.source,
+      other ? captureOtherTarget() : captureOpenTarget()
+    );
   }
 
   function omitted(sectionValue: LinkContextSection): number | null {
@@ -217,7 +223,9 @@
                 class="block w-full rounded px-2 py-1.5 text-left hover:bg-accent"
                 class:hover:bg-transparent={!edge.target}
                 title={path}
-                onclick={() => edge.target && open(edge)}
+                onclick={(event: MouseEvent) => edge.target && open(edge, event.shiftKey)}
+                oncontextmenu={(event: MouseEvent) =>
+                  showOpenOtherMenu(event, () => open(edge, true))}
               >
                 <span class="flex items-center gap-1.5 text-xs">
                   {#if !edge.target}<AlertTriangle

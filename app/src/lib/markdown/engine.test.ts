@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cancelMarkdownRender, renderMarkdown } from "./engine";
+import { cancelMarkdownRender, renderMarkdown, createMarkdownRenderSession } from "./engine";
 import { buildToc } from "./toc-dom";
 
 const options = {
@@ -14,6 +14,18 @@ const options = {
 };
 
 describe("Markdown render cancellation", () => {
+  it("別ペインの同時描画とキャンセルは干渉しない", async () => {
+    const left = createMarkdownRenderSession();
+    const right = createMarkdownRenderSession();
+    const pendingLeft = left.render("# Left", options);
+    const pendingRight = right.render("# Right", options);
+    left.cancel();
+    expect((await pendingLeft).html).toBe("");
+    expect((await pendingRight).html).toContain("Right");
+    const [a, b] = await Promise.all([left.render("# A", options), right.render("# B", options)]);
+    expect(a.html).toContain("A");
+    expect(b.html).toContain("B");
+  });
   it("明示キャンセル後はawait中のレンダリング結果を生成しない", async () => {
     const pending = renderMarkdown("# cancelled", options);
 

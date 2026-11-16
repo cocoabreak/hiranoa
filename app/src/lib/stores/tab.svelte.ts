@@ -1,4 +1,10 @@
-import { invoke } from "@tauri-apps/api/core";
+import { createPaneScopedStore, workspaceStore, MAX_WORKSPACE_TABS } from "./workspace.svelte";
+import {
+  hasPendingSource,
+  hasPendingPath,
+  reconcileDocumentResource,
+} from "$lib/document-resources";
+import type { ScrollPositions } from "./session-ui-state.svelte";
 import { contentStore } from "$lib/stores/content.svelte";
 import type { Tab } from "$lib/types";
 import {
@@ -14,6 +20,8 @@ const MAX_RECENTLY_CLOSED_TABS = 10;
 export interface ClosedTabEntry {
   tab: Tab;
   index: number;
+  paneId?: string;
+  scrollPositions?: ScrollPositions;
 }
 
 function copyTab(tab: Tab): Tab {
@@ -26,7 +34,7 @@ function copyTab(tab: Tab): Tab {
   };
 }
 
-function representsSameDocument(left: Tab, right: Tab): boolean {
+export function representsSameDocument(left: Tab, right: Tab): boolean {
   if (left.path === right.path) return true;
   if (!left.document || !left.source || !right.document || !right.source) return false;
   const leftNative = nativeDocumentIdentity(left.source, left.document);
@@ -41,17 +49,22 @@ function representsSameDocument(left: Tab, right: Tab): boolean {
   );
 }
 
-export function createTabStore() {
+const workspacePendingCloses = new Set<Promise<void>>();
+
+export function createTabStore(paneId?: string) {
   let tabs = $state<Tab[]>([]);
   let activeTabId = $state<string | null>(null);
-  let recentlyClosed = $state<ClosedTabEntry[]>([]);
+  const closed = paneId ? workspaceClosed : { entries: [] as ClosedTabEntry[] };
+  function allTabs(): Tab[] {
+    return paneId ? allWorkspaceTabs() : tabs;
+  }
   const closingIds = new Set<string>();
-  const pendingCloseOperations = new Set<Promise<void>>();
+  const pendingCloseOperations = paneId ? workspacePendingCloses : new Set<Promise<void>>();
 
   function rememberClosed(tab: Tab, index: number) {
-    recentlyClosed = [
-      ...recentlyClosed.slice(-(MAX_RECENTLY_CLOSED_TABS - 1)),
-      { tab: copyTab(tab), index },
+    closed.entries = [
+      ...closed.entries.slice(-(MAX_RECENTLY_CLOSED_TABS - 1)),
+      { tab: copyTab(tab), index, paneId, scrollPositions: sessionUiStateStore.snapshot(tab.id) },
     ];
   }
 
@@ -64,6 +77,7 @@ export function createTabStore() {
     if (activeTabId === id) {
       activeTabId = tabs[Math.min(index, tabs.length - 1)]?.id ?? null;
     }
+    if (paneId && tabs.length === 0) workspaceStore.removePane(paneId);
     return true;
   }
 
@@ -73,33 +87,37 @@ export function createTabStore() {
     closingIds.add(id);
     const index = tabs.findIndex((candidate) => candidate.id === id);
     try {
+      rememberClosed(tab, index);
+      if (!closeTab(id)) return;
+      if (!allTabs().some((candidate) => candidate.path === tab.path))
+        contentStore.delete(tab.path);
       if (tab.document && tab.source) {
-        const nativePath = nativeDocumentPath(tab.source, tab.document);
-        const identity = nativeDocumentIdentity(tab.source, tab.document);
-        const usedByAnotherTab =
-          identity !== null &&
-          tabs.some(
-            (candidate) =>
-              candidate.id !== id &&
-              !!candidate.document &&
-              !!candidate.source &&
-              nativeDocumentIdentity(candidate.source, candidate.document) === identity
+        const source = tab.source;
+        const nativePath = nativeDocumentPath(source, tab.document);
+        if (nativePath) {
+          const identity = nativeDocumentIdentity(source, tab.document);
+          await reconcileDocumentResource(
+            nativePath,
+            () =>
+              hasPendingPath(nativePath) ||
+              allTabs().some(
+                (candidate) =>
+                  !!candidate.document &&
+                  !!candidate.source &&
+                  nativeDocumentIdentity(candidate.source, candidate.document) === identity
+              )
           );
-        if (nativePath && !usedByAnotherTab) {
-          await invoke("unwatch_path", { path: nativePath }).catch(() => {});
+        } else if (source.kind === "zip") {
+          await reconcileDocumentResource(
+            source.nativePath,
+            () =>
+              hasPendingSource(source.id) ||
+              explorerStore.source?.id === source.id ||
+              allTabs().some((candidate) => candidate.source?.id === source.id),
+            source.id
+          );
         }
       }
-      if (!closeTab(id)) return;
-      contentStore.delete(tab.path);
-      if (
-        tab.source?.kind === "zip" &&
-        explorerStore.source?.id !== tab.source.id &&
-        !tabs.some((candidate) => candidate.source?.id === tab.source?.id)
-      ) {
-        await invoke("unwatch_path", { path: tab.source.nativePath }).catch(() => {});
-        await invoke("unregister_source", { sourceId: tab.source.id }).catch(() => {});
-      }
-      rememberClosed(tab, index);
     } finally {
       closingIds.delete(id);
     }
@@ -123,14 +141,15 @@ export function createTabStore() {
       return activeTabId;
     },
     get canReopenClosedTab() {
-      return recentlyClosed.length > 0;
+      return closed.entries.length > 0;
     },
     addOrActivate(tab: Tab) {
-      recentlyClosed = recentlyClosed.filter((entry) => !representsSameDocument(entry.tab, tab));
-      const existing = tabs.find((t) => t.path === tab.path);
+      closed.entries = closed.entries.filter((entry) => !representsSameDocument(entry.tab, tab));
+      const existing = tabs.find((t) => representsSameDocument(t, tab));
       if (existing) {
         activeTabId = existing.id;
       } else {
+        if (allTabs().length >= MAX_WORKSPACE_TABS) return;
         if (tab.pinned) {
           const firstUnpinned = tabs.findIndex((candidate) => !candidate.pinned);
           const index = firstUnpinned === -1 ? tabs.length : firstUnpinned;
@@ -142,7 +161,16 @@ export function createTabStore() {
       }
     },
     close: closeTab,
-    setActive(id: string) {
+    detach(id: string) {
+      const tab = tabs.find((candidate) => candidate.id === id);
+      const index = tabs.findIndex((candidate) => candidate.id === id);
+      tabs = tabs.filter((candidate) => candidate.id !== id);
+      if (activeTabId === id) activeTabId = tabs[Math.min(index, tabs.length - 1)]?.id ?? null;
+      return tab;
+    },
+    setActive(id: string, invalidate = true) {
+      if (!tabs.some((tab) => tab.id === id)) return;
+      if (invalidate && paneId) workspaceStore.beginRequest(paneId);
       activeTabId = id;
     },
     togglePin(id: string) {
@@ -181,22 +209,24 @@ export function createTabStore() {
       tabs = tabs.map((t) => (t.id === id ? { ...t, ...updates } : t));
     },
     cycle(direction: 1 | -1) {
+      if (paneId) workspaceStore.beginRequest(paneId);
       if (tabs.length === 0) return;
       const idx = tabs.findIndex((t) => t.id === activeTabId);
       const nextIdx = (idx + direction + tabs.length) % tabs.length;
       activeTabId = tabs[nextIdx].id;
     },
     jumpTo(index: number) {
+      if (paneId) workspaceStore.beginRequest(paneId);
       const tab = tabs[index];
       if (tab) activeTabId = tab.id;
     },
     takeRecentlyClosed(): ClosedTabEntry | undefined {
-      const entry = recentlyClosed.at(-1);
-      if (entry) recentlyClosed = recentlyClosed.slice(0, -1);
+      const entry = closed.entries.at(-1);
+      if (entry) closed.entries = closed.entries.slice(0, -1);
       return entry;
     },
     clearRecentlyClosed() {
-      recentlyClosed = [];
+      closed.entries = [];
     },
     closeAndUnwatch,
     async waitForCloseOperations() {
@@ -224,4 +254,26 @@ export function createTabStore() {
   };
 }
 
-export const tabStore = createTabStore();
+const workspaceClosed = $state({ entries: [] as ClosedTabEntry[] });
+const scopedTabs = createPaneScopedStore((id) => createTabStore(id));
+function allWorkspaceTabs(): Tab[] {
+  return workspaceStore.paneIds.flatMap((id) => scopedTabs.forPane(id).tabs);
+}
+export const tabStore = new Proxy(scopedTabs as typeof scopedTabs & { readonly allTabs: Tab[] }, {
+  get(target, property) {
+    if (property === "allTabs") return allWorkspaceTabs();
+    if (property === "waitForCloseOperations")
+      return async () => {
+        while (workspacePendingCloses.size) await Promise.allSettled([...workspacePendingCloses]);
+      };
+    if (["updateTab", "close", "closeAndUnwatch", "togglePin"].includes(String(property))) {
+      return (id: string, ...args: unknown[]) => {
+        const owner = workspaceStore.paneIds
+          .map((paneId) => scopedTabs.forPane(paneId))
+          .find((store) => store.tabs.some((tab) => tab.id === id));
+        if (owner) return Reflect.get(owner, property)(id, ...args);
+      };
+    }
+    return Reflect.get(target, property);
+  },
+});

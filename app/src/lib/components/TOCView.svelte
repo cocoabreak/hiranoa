@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { workspaceStore } from "$lib/stores/workspace.svelte";
   import { tocStore } from "$lib/stores/toc.svelte";
   import { frontmatterStore } from "$lib/stores/frontmatter.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
@@ -13,7 +14,10 @@
   const m = $derived(i18n.m);
 
   function scrollTo(id: string) {
-    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    workspaceStore
+      .root()
+      ?.querySelector(`#${CSS.escape(id)}`)
+      ?.scrollIntoView({ behavior: "smooth" });
     tocStore.setActiveId(id);
     onselect?.();
   }

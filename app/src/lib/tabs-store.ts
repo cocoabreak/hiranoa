@@ -1,3 +1,7 @@
+import { sessionRestorePromptStore } from "$lib/stores/session-restore-prompt.svelte";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
+import { captureOpenTarget } from "$lib/actions/workspace-actions";
+import { normalizeSession, type PersistedSession } from "$lib/session-schema";
 import { invoke } from "@tauri-apps/api/core";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { explorerStore } from "$lib/stores/explorer.svelte";
@@ -9,26 +13,10 @@ import {
 import { authorizeArchivePath, authorizePath } from "$lib/actions/security";
 import { openMarkdownFile, openSourceMarkdown } from "$lib/actions/file-actions";
 import { nativeDocumentPath, registerNativeSource, registerZipSource } from "$lib/document-sources";
-import type { DocumentSourceInfo, SourceSpec } from "$lib/types";
+import type { DocumentSourceInfo } from "$lib/types";
 import { LatestSaveQueue } from "$lib/state-save-queue";
-import { sessionUiStateStore, type ScrollPositions } from "$lib/stores/session-ui-state.svelte";
-import { searchStore, type PersistedSearchState } from "$lib/stores/search.svelte";
-
-interface PersistedTab {
-  path: string;
-  pinned: boolean;
-  source?: SourceSpec;
-  documentPath?: string;
-  scrollPositions?: ScrollPositions;
-}
-
-interface PersistedSession {
-  tabs?: PersistedTab[];
-  activeIndex?: number | null;
-  explorer?: SourceSpec | null;
-  expandedDirs?: string[];
-  search?: PersistedSearchState;
-}
+import { sessionUiStateStore } from "$lib/stores/session-ui-state.svelte";
+import { searchStore } from "$lib/stores/search.svelte";
 
 const tabsSaveQueue = new LatestSaveQueue<PersistedSession>(
   (value) => invoke("save_app_state", { kind: "tabs", value }),
@@ -36,7 +24,7 @@ const tabsSaveQueue = new LatestSaveQueue<PersistedSession>(
 );
 
 async function loadSession(): Promise<PersistedSession> {
-  return await invoke<PersistedSession>("load_app_state", { kind: "tabs" });
+  return normalizeSession(await invoke<unknown>("load_app_state", { kind: "tabs" }));
 }
 
 export function restoredActiveTabId(
@@ -48,12 +36,13 @@ export function restoredActiveTabId(
 
 /** 保存済みのタブ一覧・アクティブタブ・エクスプローラーのルートフォルダを実際に開き直す */
 export async function restoreSavedTabs(): Promise<void> {
+  if (sessionRestorePromptStore.restoring) return;
+  sessionRestorePromptStore.beginRestore();
   try {
     const session = await loadSession();
-    const saved = session.tabs ?? [];
-    const activeIndex = session.activeIndex ?? null;
+    if (!session.workspace) return;
     const sourceCache = new Map<string, DocumentSourceInfo>();
-    const restoredTabIds = new Map<number, string>();
+    const restoredPanes = new Map<number, string>();
 
     if (session.explorer) {
       const opened =
@@ -68,72 +57,98 @@ export async function restoreSavedTabs(): Promise<void> {
       }
     }
 
-    for (const [
-      savedIndex,
-      { path, pinned, source: persistedSource, documentPath, scrollPositions },
-    ] of saved.entries()) {
-      try {
-        if (!persistedSource || documentPath === undefined) {
-          if (!(await authorizePath(path))) continue;
-          if (!(await openMarkdownFile(path))) continue;
-        } else {
-          const cacheKey = `${persistedSource.kind}:${persistedSource.nativePath}`;
-          let source = sourceCache.get(cacheKey);
-          if (!source) {
-            const accessPath =
-              persistedSource.kind === "native"
-                ? nativeDocumentPath(
-                    {
-                      id: "restore",
-                      label: "",
-                      nativePath: persistedSource.nativePath,
-                      kind: "native",
-                      capabilities: {
-                        watch: "entries",
-                        externalEditor: true,
-                        respectGitignore: true,
-                        fullTextSearch: true,
-                        wikiLinks: true,
+    for (const [paneIndex, savedPane] of session.workspace.panes.entries()) {
+      const paneId = paneIndex === 0 ? workspaceStore.paneIds[0] : workspaceStore.addPane();
+      if (!paneId) continue;
+      const tabs = tabStore.forPane(paneId);
+      const restoredTabIds = new Map<number, string>();
+      for (const [
+        savedIndex,
+        { path, pinned, source: persistedSource, documentPath, scrollPositions, viewMode },
+      ] of savedPane.tabs.entries()) {
+        try {
+          if (!path) continue;
+          if (!persistedSource || documentPath === undefined) {
+            if (!(await authorizePath(path))) continue;
+            if (!(await openMarkdownFile(path, captureOpenTarget(paneId)))) continue;
+          } else {
+            const cacheKey = `${persistedSource.kind}:${persistedSource.nativePath}`;
+            let source = sourceCache.get(cacheKey);
+            if (!source) {
+              const accessPath =
+                persistedSource.kind === "native"
+                  ? nativeDocumentPath(
+                      {
+                        id: "restore",
+                        label: "",
+                        nativePath: persistedSource.nativePath,
+                        kind: "native",
+                        capabilities: {
+                          watch: "entries",
+                          externalEditor: true,
+                          respectGitignore: true,
+                          fullTextSearch: true,
+                          wikiLinks: true,
+                        },
                       },
-                    },
-                    { sourceId: "restore", path: documentPath }
-                  )
-                : persistedSource.nativePath;
+                      { sourceId: "restore", path: documentPath }
+                    )
+                  : persistedSource.nativePath;
+              if (
+                !accessPath ||
+                !(persistedSource.kind === "zip"
+                  ? await authorizeArchivePath(accessPath)
+                  : await authorizePath(accessPath))
+              )
+                continue;
+              source =
+                persistedSource.kind === "native"
+                  ? await registerNativeSource(persistedSource.nativePath)
+                  : await registerZipSource(persistedSource.nativePath);
+              sourceCache.set(cacheKey, source);
+            }
             if (
-              !accessPath ||
-              !(persistedSource.kind === "zip"
-                ? await authorizeArchivePath(accessPath)
-                : await authorizePath(accessPath))
-            )
+              !(await openSourceMarkdown(
+                { sourceId: source.id, path: documentPath },
+                source,
+                undefined,
+                captureOpenTarget(paneId)
+              ))
+            ) {
               continue;
-            source =
-              persistedSource.kind === "native"
-                ? await registerNativeSource(persistedSource.nativePath)
-                : await registerZipSource(persistedSource.nativePath);
-            sourceCache.set(cacheKey, source);
+            }
           }
-          if (!(await openSourceMarkdown({ sourceId: source.id, path: documentPath }, source))) {
-            continue;
+          const restored = tabs.tabs.find((tab) => tab.id === tabs.activeTabId);
+          if (restored) {
+            restoredTabIds.set(savedIndex, restored.id);
+            tabs.updateTab(restored.id, { viewMode });
+            sessionUiStateStore.restoreScrollPositions(restored.id, scrollPositions);
+            if (pinned !== !!restored.pinned) tabs.togglePin(restored.id);
           }
+        } catch {
+          continue;
         }
-        const restored = tabStore.tabs.find((tab) => tab.id === tabStore.activeTabId);
-        if (restored) {
-          restoredTabIds.set(savedIndex, restored.id);
-          sessionUiStateStore.restoreScrollPositions(restored.id, scrollPositions);
-          if (pinned !== !!restored.pinned) tabStore.togglePin(restored.id);
-        }
-      } catch {
-        continue;
       }
-    }
 
-    const restoredId = restoredActiveTabId(restoredTabIds, activeIndex);
-    if (restoredId) tabStore.setActive(restoredId);
+      const restoredId = restoredActiveTabId(restoredTabIds, savedPane.activeIndex ?? null);
+      if (restoredId) tabs.setActive(restoredId);
+      searchStore.forPane(paneId).restoreSessionState(savedPane.search);
+      if (tabs.tabs.length) restoredPanes.set(paneIndex, paneId);
+      else workspaceStore.removePane(paneId);
+    }
+    for (const id of [...workspaceStore.paneIds]) {
+      if (!tabStore.forPane(id).tabs.length) workspaceStore.removePane(id);
+    }
+    const activePane =
+      restoredPanes.get(session.workspace.activePaneIndex) ?? restoredPanes.values().next().value;
+    if (activePane) workspaceStore.activate(activePane);
+    workspaceStore.setRatio(session.workspace.splitRatio);
 
     await restoreExpandedDirectories(session.expandedDirs);
-    searchStore.restoreSessionState(session.search);
   } catch (e) {
     console.warn("タブの復元に失敗しました:", e);
+  } finally {
+    sessionRestorePromptStore.endRestore();
   }
 }
 
@@ -168,14 +183,20 @@ export async function loadTabsOnStartup(): Promise<{ promptRestore: boolean }> {
   }
 
   if (!freshLaunch) {
+    if ((await loadSession().catch(() => ({}) as PersistedSession)).schemaVersion === -1)
+      return { promptRestore: true };
     await restoreSavedTabs();
     return { promptRestore: false };
   }
 
   try {
     const session = await loadSession();
-    const saved = session.tabs ?? [];
-    return { promptRestore: saved.length > 0 || !!session.explorer };
+    return {
+      promptRestore:
+        session.schemaVersion === -1 ||
+        !!session.workspace?.panes.some((pane) => pane.tabs.length > 0) ||
+        !!session.explorer,
+    };
   } catch {
     return { promptRestore: false };
   }
@@ -183,22 +204,35 @@ export async function loadTabsOnStartup(): Promise<{ promptRestore: boolean }> {
 
 /** 現在開いているタブ一覧・アクティブタブ・エクスプローラーのルートフォルダをディスクに保存する */
 export async function saveTabs(): Promise<void> {
+  if (sessionRestorePromptStore.restoring) return;
   try {
-    const activeTab = tabStore.tabs.find((t) => t.id === tabStore.activeTabId);
     await tabsSaveQueue.enqueue({
-      tabs: tabStore.tabs.map((t) => ({
-        path: t.displayPath ?? t.path,
-        pinned: !!t.pinned,
-        source: t.source ? { kind: t.source.kind, nativePath: t.source.nativePath } : undefined,
-        documentPath: t.document?.path,
-        scrollPositions: sessionUiStateStore.snapshot(t.id),
-      })),
-      activeIndex: activeTab ? tabStore.tabs.indexOf(activeTab) : null,
+      schemaVersion: 2,
+      workspace: {
+        panes: workspaceStore.paneIds.map((id) => {
+          const tabs = tabStore.forPane(id);
+          return {
+            tabs: tabs.tabs.map((t) => ({
+              path: t.displayPath ?? t.path,
+              pinned: !!t.pinned,
+              source: t.source
+                ? { kind: t.source.kind, nativePath: t.source.nativePath }
+                : undefined,
+              documentPath: t.document?.path,
+              scrollPositions: sessionUiStateStore.snapshot(t.id),
+              viewMode: t.viewMode ?? "rendered",
+            })),
+            activeIndex: tabs.tabs.findIndex((t) => t.id === tabs.activeTabId),
+            search: searchStore.forPane(id).sessionState,
+          };
+        }),
+        activePaneIndex: workspaceStore.paneIds.indexOf(workspaceStore.activePaneId),
+        splitRatio: workspaceStore.splitRatio,
+      },
       explorer: explorerStore.source
         ? { kind: explorerStore.source.kind, nativePath: explorerStore.source.nativePath }
         : null,
       expandedDirs: sanitizeExpandedDirectories([...explorerStore.expandedDirs]),
-      search: searchStore.sessionState,
     });
   } catch (e) {
     console.warn("タブの保存に失敗しました:", e);

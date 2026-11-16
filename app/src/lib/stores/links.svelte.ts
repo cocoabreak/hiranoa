@@ -1,3 +1,4 @@
+import { captureOpenTarget, type OpenTarget } from "$lib/actions/workspace-actions";
 import { invoke } from "@tauri-apps/api/core";
 import { openSourceMarkdown } from "$lib/actions/file-actions";
 import { settingsStore } from "$lib/stores/settings.svelte";
@@ -266,10 +267,14 @@ export class LinkInspectorStore {
     }
   }
 
-  async openDocument(document: DocumentRef | null, source: DocumentSourceInfo): Promise<boolean> {
+  async openDocument(
+    document: DocumentRef | null,
+    source: DocumentSourceInfo,
+    target: OpenTarget = captureOpenTarget()
+  ): Promise<boolean> {
     if (!document || document.sourceId !== source.id) return false;
     try {
-      return await openSourceMarkdown(document, source);
+      return await openSourceMarkdown(document, source, undefined, target);
     } catch (error) {
       this.error = String(error);
       return false;

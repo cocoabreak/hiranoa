@@ -2,6 +2,19 @@ import type { ja } from "./ja";
 
 /** 英語辞書。`typeof ja` で型を縛り、キー欠落をコンパイル時に検出する */
 export const en: typeof ja = {
+  split: {
+    split: "Split view",
+    unsplit: "Merge panes",
+    focus: "Switch active pane",
+    left: "Left pane",
+    right: "Right pane",
+    resize: "Resize panes",
+    splitOpenRight: "Split right and open",
+    openLeft: "Open on the left",
+    openRight: "Open on the right",
+    moveLeft: "Move tab to the left",
+    moveRight: "Move tab to the right",
+  },
   metadata: {
     keysLimited:
       "Some property suggestions were omitted. You can enter any property name directly.",

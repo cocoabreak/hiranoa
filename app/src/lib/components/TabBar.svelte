@@ -1,9 +1,17 @@
 <script lang="ts">
+  import { openOtherPaneLabel, moveOtherPaneLabel } from "$lib/pane-labels";
+
   import { Pin, PinOff } from "@lucide/svelte";
   import { Menu, MenuItem } from "@tauri-apps/api/menu";
   import { reopenRecentlyClosedTab } from "$lib/actions/tab-actions";
-  import { tabStore } from "$lib/stores/tab.svelte";
+  import { tabStore as sharedtabStore } from "$lib/stores/tab.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
+
+  import { copyTabToOther, moveTabToOther } from "$lib/actions/workspace-actions";
+  import { workspaceStore } from "$lib/stores/workspace.svelte";
+  import { untrack } from "svelte";
+  let { paneId = workspaceStore.activePaneId }: { paneId?: string } = $props();
+  const tabStore = untrack(() => sharedtabStore.forPane(paneId));
 
   const m = $derived(i18n.m);
   const DRAG_THRESHOLD_PX = 5;
@@ -131,6 +139,7 @@
       suppressClickId = null;
       return;
     }
+    workspaceStore.activate(paneId);
     tabStore.setActive(id);
   }
 
@@ -151,6 +160,17 @@
           action: () => tabStore.togglePin(id),
         }),
       ];
+      if (workspaceStore.paneIds.length === 2)
+        items.push(
+          await MenuItem.new({
+            text: openOtherPaneLabel(paneId),
+            action: () => copyTabToOther(paneId, id),
+          }),
+          await MenuItem.new({
+            text: moveOtherPaneLabel(paneId),
+            action: () => moveTabToOther(paneId, id),
+          })
+        );
       if (!tab.pinned) {
         items.push(
           await MenuItem.new({

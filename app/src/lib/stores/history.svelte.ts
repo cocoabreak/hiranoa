@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 /** 履歴の最大保持数。超えたら古いものから捨てる */
 const MAX_ENTRIES = 50;
 
@@ -58,4 +59,4 @@ export function createHistoryStore() {
   };
 }
 
-export const historyStore = createHistoryStore();
+export const historyStore = createPaneScopedStore(createHistoryStore);
