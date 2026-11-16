@@ -34,7 +34,15 @@ fn validate_state(kind: &str, value: &Value) -> Result<(), String> {
         .ok_or_else(|| "状態データはオブジェクトである必要があります".to_string())?;
     let allowed: &[&str] = match kind {
         "settings" => &["settings"],
-        "tabs" => &["tabs", "activeIndex", "explorer", "expandedDirs", "search"],
+        "tabs" => &[
+            "schemaVersion",
+            "workspace",
+            "tabs",
+            "activeIndex",
+            "explorer",
+            "expandedDirs",
+            "search",
+        ],
         "recent" => &["files", "folders", "archives"],
         _ => return Err("未対応の状態ストアです".to_string()),
     };
@@ -52,6 +60,9 @@ fn validate_state(kind: &str, value: &Value) -> Result<(), String> {
         }
     }
     if kind == "tabs" {
+        if object.contains_key("schemaVersion") || object.contains_key("workspace") {
+            validate_workspace(object)?;
+        }
         if let Some(expanded_dirs) = object.get("expandedDirs") {
             let paths = expanded_dirs
                 .as_array()
@@ -78,6 +89,138 @@ fn validate_state(kind: &str, value: &Value) -> Result<(), String> {
             {
                 return Err("検索状態が不正です".to_string());
             }
+        }
+    }
+    Ok(())
+}
+
+fn validate_workspace(object: &Map<String, Value>) -> Result<(), String> {
+    let invalid = || "Workspace状態が不正です".to_string();
+    if object.get("schemaVersion").and_then(Value::as_u64) != Some(2)
+        || ["tabs", "activeIndex", "search"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    {
+        return Err(invalid());
+    }
+    let workspace = object
+        .get("workspace")
+        .and_then(Value::as_object)
+        .ok_or_else(invalid)?;
+    if workspace
+        .keys()
+        .any(|key| !["panes", "activePaneIndex", "splitRatio"].contains(&key.as_str()))
+    {
+        return Err(invalid());
+    }
+    let panes = workspace
+        .get("panes")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    if panes.is_empty() || panes.len() > 2 {
+        return Err(invalid());
+    }
+    let active = workspace
+        .get("activePaneIndex")
+        .and_then(Value::as_u64)
+        .ok_or_else(invalid)?;
+    let ratio = workspace
+        .get("splitRatio")
+        .and_then(Value::as_f64)
+        .ok_or_else(invalid)?;
+    if active >= panes.len() as u64 || !(0.2..=0.8).contains(&ratio) {
+        return Err(invalid());
+    }
+    let mut count = 0;
+    for pane in panes {
+        let pane_object = pane.as_object().ok_or_else(invalid)?;
+        if pane_object
+            .keys()
+            .any(|key| !["tabs", "activeIndex", "search"].contains(&key.as_str()))
+        {
+            return Err(invalid());
+        }
+        let tabs = pane_object
+            .get("tabs")
+            .and_then(Value::as_array)
+            .ok_or_else(invalid)?;
+        if pane_object.get("activeIndex").is_some_and(|value| {
+            !value.is_null()
+                && value.as_i64().is_none_or(|index| {
+                    if tabs.is_empty() {
+                        index != -1
+                    } else {
+                        index < 0 || index as usize >= tabs.len()
+                    }
+                })
+        }) {
+            return Err(invalid());
+        }
+        for tab in tabs {
+            validate_workspace_tab(tab)?;
+        }
+        count += tabs.len();
+        if count > 100 {
+            return Err(invalid());
+        }
+        validate_state("tabs", pane)?;
+    }
+    Ok(())
+}
+
+fn validate_workspace_tab(tab: &Value) -> Result<(), String> {
+    let invalid = || "タブ状態が不正です".to_string();
+    let tab = tab.as_object().ok_or_else(invalid)?;
+    if tab.keys().any(|key| {
+        ![
+            "path",
+            "pinned",
+            "source",
+            "documentPath",
+            "scrollPositions",
+            "viewMode",
+        ]
+        .contains(&key.as_str())
+    }) || tab
+        .get("path")
+        .and_then(Value::as_str)
+        .is_none_or(|path| path.is_empty() || path.len() > 131_072)
+        || tab.get("pinned").is_some_and(|value| !value.is_boolean())
+        || tab
+            .get("documentPath")
+            .is_some_and(|value| value.as_str().is_none_or(|path| path.len() > 131_072))
+        || tab
+            .get("viewMode")
+            .is_some_and(|value| !matches!(value.as_str(), Some("rendered" | "source")))
+    {
+        return Err(invalid());
+    }
+    if let Some(source) = tab.get("source") {
+        let source = source.as_object().ok_or_else(invalid)?;
+        if source
+            .keys()
+            .any(|key| !["kind", "nativePath"].contains(&key.as_str()))
+            || !matches!(
+                source.get("kind").and_then(Value::as_str),
+                Some("native" | "zip")
+            )
+            || source
+                .get("nativePath")
+                .and_then(Value::as_str)
+                .is_none_or(|path| path.is_empty() || path.len() > 131_072)
+        {
+            return Err(invalid());
+        }
+    }
+    if let Some(positions) = tab.get("scrollPositions") {
+        let positions = positions.as_object().ok_or_else(invalid)?;
+        if positions.iter().any(|(key, value)| {
+            !["rendered", "source", "safe"].contains(&key.as_str())
+                || value
+                    .as_f64()
+                    .is_none_or(|position| !position.is_finite() || position < 0.0)
+        }) {
+            return Err(invalid());
         }
     }
     Ok(())
@@ -112,7 +255,7 @@ pub fn save_app_state(app: AppHandle, kind: String, value: Value) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use super::{file_for_kind, validate_state};
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[test]
     fn only_known_state_stores_are_exposed() {
@@ -149,5 +292,31 @@ mod tests {
             &json!({ "search": { "open": "yes", "query": "x", "useRegex": false } })
         )
         .is_err());
+    }
+
+    #[test]
+    fn workspace_schema_bounds_panes_and_total_tabs() {
+        let state = |panes: Value| {
+            json!({
+                "schemaVersion": 2,
+                "workspace": { "panes": panes, "activePaneIndex": 0, "splitRatio": 0.5 },
+                "explorer": null, "expandedDirs": []
+            })
+        };
+        let pane = json!({ "tabs": [], "activeIndex": null, "search": {"open": false,"query":"","useRegex":false} });
+        assert!(validate_state("tabs", &state(json!([pane.clone(), pane.clone()]))).is_ok());
+        assert!(validate_state("tabs", &state(json!([]))).is_err());
+        assert!(validate_state(
+            "tabs",
+            &state(json!([pane.clone(), pane.clone(), pane.clone()]))
+        )
+        .is_err());
+        let oversized = json!({"tabs":vec![json!({"path":"D:/notes/a.md"});51]});
+        assert!(validate_state("tabs", &state(json!([oversized.clone(), oversized]))).is_err());
+        let mut invalid = state(json!([pane]));
+        invalid["workspace"]["splitRatio"] = json!(1);
+        assert!(validate_state("tabs", &invalid).is_err());
+        invalid["schemaVersion"] = json!(3);
+        assert!(validate_state("tabs", &invalid).is_err());
     }
 }

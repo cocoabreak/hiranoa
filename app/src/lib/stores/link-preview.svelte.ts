@@ -77,6 +77,11 @@ export class LinkPreviewStore {
   path = $state("");
   rect = $state<LinkPreviewRect | null>(null);
   error = $state(false);
+  private originRoot: Element | null = null;
+  closeFrom(root: Element) {
+    if (this.originRoot === root || (this.describedOrigin && root.contains(this.describedOrigin)))
+      this.close();
+  }
   private requestId = 0;
   private showTimer: ReturnType<typeof setTimeout> | null = null;
   private hideTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,6 +128,7 @@ export class LinkPreviewStore {
     this.detachDescription();
     const requestId = ++this.requestId;
     this.currentTarget = target;
+    this.originRoot = target.origin?.closest(".markdown-body") ?? null;
     this.rectProvider = target.getRect;
     this.path = target.target.path;
     this.content = null;
@@ -145,6 +151,7 @@ export class LinkPreviewStore {
     this.detachDescription();
     const requestId = ++this.requestId;
     this.currentTarget = null;
+    this.originRoot = origin?.closest(".markdown-body") ?? null;
     this.rectProvider = getRect;
     this.path = path;
     this.content = null;
@@ -169,6 +176,7 @@ export class LinkPreviewStore {
     this.detachDescription();
     const requestId = ++this.requestId;
     this.currentTarget = null;
+    this.originRoot = origin?.closest(".markdown-body") ?? null;
     this.rectProvider = getRect;
     this.path = path;
     this.content = null;
@@ -180,6 +188,10 @@ export class LinkPreviewStore {
     this.showTimer = setTimeout(() => {
       if (requestId === this.requestId) this.status = "missing";
     }, delay);
+  }
+
+  hideFromOrigin(origin: HTMLElement, delay = HIDE_DELAY_MS): void {
+    if (this.describedOrigin === origin) this.hide(delay);
   }
 
   hide(delay = HIDE_DELAY_MS): void {
@@ -197,6 +209,7 @@ export class LinkPreviewStore {
   }
 
   close(): void {
+    this.originRoot = null;
     this.requestId++;
     this.cancelShow();
     this.cancelHide();

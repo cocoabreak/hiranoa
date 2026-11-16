@@ -6,6 +6,7 @@ export const LINK_GRAPH_WINDOW_LABEL = "link-graph";
 export const LINK_GRAPH_OPEN_DOCUMENT_EVENT = "link-graph-open-document";
 
 export interface LinkGraphWindowContext {
+  paneId: string;
   document: DocumentRef;
   sourceGeneration: number;
   revision: number;

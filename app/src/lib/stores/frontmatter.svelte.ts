@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 export type FrontmatterData = Record<string, unknown>;
 
 function createFrontmatterStore() {
@@ -13,4 +14,4 @@ function createFrontmatterStore() {
   };
 }
 
-export const frontmatterStore = createFrontmatterStore();
+export const frontmatterStore = createPaneScopedStore(createFrontmatterStore);

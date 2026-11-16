@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 import type { ReadingStats } from "$lib/markdown/reading-stats";
 
 function createReadingStatsStore() {
@@ -13,4 +14,4 @@ function createReadingStatsStore() {
   };
 }
 
-export const readingStatsStore = createReadingStatsStore();
+export const readingStatsStore = createPaneScopedStore(createReadingStatsStore);

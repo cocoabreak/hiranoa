@@ -76,7 +76,7 @@ try {
         headingIds: [...main.querySelectorAll('h2')].map(h => h.id),
         definition: main.querySelector('dl dd strong')?.textContent,
         footnote: main.querySelector('.footnote-ref a')?.getAttribute('href'),
-        footnoteTarget: main.querySelector('#fn1')?.textContent,
+        footnoteTarget: main.querySelector('[data-logical-id="fn1"]')?.textContent,
         callout: main.querySelector('.callout-note .callout-title-text')?.textContent,
         checked: main.querySelector('input[type="checkbox"]')?.checked,
         emoji: main.textContent.includes('😄'),
@@ -269,6 +269,27 @@ try {
     await driver.waitFor(`document.querySelector('[role="main"]')?.innerText.includes('At limit')`);
   });
 
+  await test("左右同一文書のIDと表示状態を分離し、片側クローズ後も本文を残す", async () => {
+    await driver.evaluate("window.__e2e.resetSession()");
+    await open("openMarkdownFile", fixtures.compatibility);
+    await driver.waitFor("document.querySelector('.footnote-ref') !== null");
+    await driver.key("Ctrl+\\");
+    await driver.waitFor("document.querySelectorAll('.markdown-body .footnote-ref').length === 2");
+    const ids = await driver.evaluate(
+      "[...document.querySelectorAll('.markdown-body [id]')].map(el => el.id)"
+    );
+    assert.equal(new Set(ids).size, ids.length);
+    assert.equal(await driver.click('button[aria-label="元のMarkdownを表示"]'), "OK");
+    await driver.waitFor("document.querySelectorAll('.source-view').length === 1");
+    assert.equal(
+      await driver.evaluate("document.querySelectorAll('.markdown-body .footnote-ref').length"),
+      1
+    );
+    await driver.key("Ctrl+W");
+    await driver.waitFor("document.querySelectorAll('.markdown-body').length === 1");
+    await driver.waitFor("document.querySelector('.footnote-ref') !== null");
+  });
+
   await test("更新通知を表示できる", async () => {
     await driver.evaluate("window.__e2e.showUpdateAvailable()");
     await driver.waitFor(
@@ -283,7 +304,9 @@ try {
       "document.querySelector('[role=\"main\"]')?.scrollHeight > document.querySelector('[role=\"main\"]')?.clientHeight + 600"
     );
     // 対象文書のDOM構築と二段階の初期スクロール復元が完了してから検索する。
-    await driver.waitFor("document.querySelector('.markdown-body #section-299') !== null");
+    await driver.waitFor(
+      "document.querySelector('.markdown-body [data-logical-id=\"section-299\"]') !== null"
+    );
     await driver.evaluate(
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))"
     );

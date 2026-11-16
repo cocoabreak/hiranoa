@@ -3,20 +3,27 @@
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { message } from "@tauri-apps/plugin-dialog";
   import { invoke } from "@tauri-apps/api/core";
-  import { tabStore } from "$lib/stores/tab.svelte";
+  import { tabStore as sharedtabStore } from "$lib/stores/tab.svelte";
   import { contentStore } from "$lib/stores/content.svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import { explorerStore } from "$lib/stores/explorer.svelte";
-  import { tocStore } from "$lib/stores/toc.svelte";
-  import { readingStatsStore } from "$lib/stores/reading-stats.svelte";
-  import { frontmatterStore } from "$lib/stores/frontmatter.svelte";
+  import { tocStore as sharedtocStore } from "$lib/stores/toc.svelte";
+  import { readingStatsStore as sharedreadingStatsStore } from "$lib/stores/reading-stats.svelte";
+  import { frontmatterStore as sharedfrontmatterStore } from "$lib/stores/frontmatter.svelte";
   import { recentStore } from "$lib/stores/recent.svelte";
-  import { cancelMarkdownRender, renderMarkdown } from "$lib/markdown/engine";
+  import { createMarkdownRenderSession } from "$lib/markdown/engine";
   import { computeReadingStats } from "$lib/markdown/reading-stats";
   import { viewerPlugins } from "$lib/plugins";
   import { setupCodeCopy } from "$lib/markdown/code-copy";
   import { setupImageLightboxTrigger } from "$lib/markdown/image-lightbox-trigger";
   import { setupLinkPreviewTrigger } from "$lib/actions/link-preview";
+  import { decodeHeadingAnchor } from "$lib/markdown/heading-anchor";
+  import { namespaceViewDom } from "$lib/markdown/view-dom";
+  import {
+    captureOpenTarget,
+    captureOtherTarget,
+    navigateOpenedAnchor,
+  } from "$lib/actions/workspace-actions";
   import { buildToc, scrollToAnchor } from "$lib/markdown/toc-dom";
   import { applyIntrinsicImageSize, hydrateLocalImages } from "$lib/markdown/local-images";
   import {
@@ -28,7 +35,7 @@
   import { authorizePath } from "$lib/actions/security";
   import { showViewerContextMenu } from "$lib/actions/context-menu";
   import { sessionRestorePromptStore } from "$lib/stores/session-restore-prompt.svelte";
-  import { searchStore } from "$lib/stores/search.svelte";
+  import { searchStore as sharedsearchStore } from "$lib/stores/search.svelte";
   import { applyHighlights, clearHighlights } from "$lib/markdown/search-highlight";
   import { buildSearchResults } from "$lib/markdown/search-results";
   import { saveSettings } from "$lib/settings-store";
@@ -40,10 +47,11 @@
   import SafeModeView from "./SafeModeView.svelte";
   import SourceView from "./SourceView.svelte";
   import MetadataSummary from "./MetadataSummary.svelte";
-  import { documentAnchorStore } from "$lib/stores/document-anchor.svelte";
+  import { documentAnchorStore as shareddocumentAnchorStore } from "$lib/stores/document-anchor.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
   import { protectExternalImages } from "$lib/markdown/external-images";
   import {
+    subscribeExternalImageApprovals,
     approveExternalImagesForDocument,
     areExternalImagesApprovedForDocument,
   } from "$lib/stores/external-image-permission";
@@ -55,9 +63,26 @@
     type ScrollViewMode,
   } from "$lib/stores/session-ui-state.svelte";
 
+  import { workspaceStore } from "$lib/stores/workspace.svelte";
+
+  let { paneId = workspaceStore.activePaneId }: { paneId?: string } = $props();
+  const tabStore = untrack(() => sharedtabStore.forPane(paneId));
+  const tocStore = untrack(() => sharedtocStore.forPane(paneId));
+  const frontmatterStore = untrack(() => sharedfrontmatterStore.forPane(paneId));
+  const readingStatsStore = untrack(() => sharedreadingStatsStore.forPane(paneId));
+  const searchStore = untrack(() => sharedsearchStore.forPane(paneId));
+  const documentAnchorStore = untrack(() => shareddocumentAnchorStore.forPane(paneId));
+
   const m = $derived(i18n.m);
 
+  const renderSession = createMarkdownRenderSession();
+  const renderMarkdown = renderSession.render;
+  const cancelMarkdownRender = renderSession.cancel;
   let contentEl: HTMLElement;
+  $effect(() => {
+    workspaceStore.setRoot(paneId, contentEl);
+    return () => workspaceStore.setRoot(paneId, undefined);
+  });
   let renderedHtml = $state("");
   let isLoading = $state(false);
   let currentMarks: HTMLElement[] = []; // 検索ハイライトの現在のmark要素（他のimperativeなDOMハンドルと同様、通常変数）
@@ -66,6 +91,8 @@
   let renderGeneration = 0;
   let externalImageCount = $state(0);
   let externalImageApprovalVersion = $state(0);
+
+  const stopImageApprovals = subscribeExternalImageApprovals(() => externalImageApprovalVersion++);
 
   // $state にすると $effect 内で変更時に再トリガーされ Mermaid が競合するため通常変数にする
   let prevViewKey: string | null = null;
@@ -81,8 +108,6 @@
   let cleanupImageLightbox: (() => void) | null = null;
   let cleanupLinkPreview: (() => void) | null = null;
   let cleanupLocalImages: (() => void) | null = null;
-  // ファイルを開いた後にスクロールするアンカー
-  let pendingAnchor: string | null = null;
   $effect(() => {
     const request = documentAnchorStore.pending;
     const document = activeTab?.document;
@@ -91,16 +116,19 @@
       !document ||
       request.key !== documentKey(document) ||
       isLoading ||
-      !renderedHtml ||
+      (!renderedHtml && !isSafeMode && !isSourceMode) ||
       !contentEl
     )
       return;
     const key = request.key;
-    const anchor = request.anchor;
+    const anchor = decodeHeadingAnchor(request.anchor);
     documentAnchorStore.consume(request.id);
     requestAnimationFrame(() => {
       if (activeTab?.document && documentKey(activeTab.document) === key)
-        scrollToAnchor(contentEl, anchor);
+        scrollToAnchor(
+          contentEl,
+          tocStore.headings.find((heading) => heading.referenceId === anchor)?.id ?? anchor
+        );
     });
   });
 
@@ -167,10 +195,11 @@
   }
 
   async function openRecentFile(path: string) {
+    const openTarget = captureOpenTarget(paneId);
     try {
       // 最近開いたファイル＝過去の明示操作なので、親フォルダを信頼ルートに再登録する
       if (!(await authorizePath(path))) return;
-      await openMarkdownFile(path);
+      await openMarkdownFile(path, openTarget);
       // 直近履歴から開いたら、前回セッションの復元プロンプトは閉じる
       sessionRestorePromptStore.hide();
     } catch (err) {
@@ -193,7 +222,6 @@
     const path = activeTab?.path;
     if (!path) return;
     approveExternalImagesForDocument(path);
-    externalImageApprovalVersion++;
   }
 
   // コンテンツ・レンダラー設定変更時に再レンダリング
@@ -272,8 +300,12 @@
       clearHighlights(contentEl);
       currentMarks = [];
       currentMarkedElement = null;
+      namespaceViewDom(contentEl, `view-${paneId}`);
       tocStore.setSafeOutline(
-        activeContent?.safeOutline ?? [],
+        (activeContent?.safeOutline ?? []).map((heading) => ({
+          ...heading,
+          id: `view-${paneId}-${heading.id}`,
+        })),
         activeContent?.safeOutlineTruncated ?? false
       );
       tocStore.setActiveId(null);
@@ -283,7 +315,6 @@
         searchStore.setResult(0, null);
         searchStore.setResults([], false);
       }
-      pendingAnchor = null;
 
       if (shouldRestoreScroll(viewKey, prevViewKey, restoredPositionsChanged)) {
         scheduleScrollRestore(viewKey, tab?.id, scrollViewMode);
@@ -323,7 +354,14 @@
 
     // 見出しに ID を付与して TOC を構築
     const headings = buildToc(contentEl);
-    tocStore.setHeadings(headings);
+    namespaceViewDom(contentEl, `view-${paneId}`);
+    tocStore.setHeadings(
+      headings.map((heading) => ({
+        ...heading,
+        referenceId: heading.id,
+        id: `view-${paneId}-${heading.id}`,
+      }))
+    );
     readingStatsStore.set(computeReadingStats(contentEl));
 
     // IntersectionObserver でスクロール追随
@@ -385,13 +423,6 @@
     cleanupLocalImages?.();
     cleanupLocalImages =
       tab?.document && tab.source ? hydrateLocalImages(contentEl, tab.document, tab.source) : null;
-
-    // ファイルを開いた際の保留アンカーにスクロール
-    if (pendingAnchor) {
-      const anchor = pendingAnchor;
-      pendingAnchor = null;
-      requestAnimationFrame(() => scrollToAnchor(contentEl, anchor));
-    }
   });
 
   // 現在地マッチにクラス付けする。scroll=trueのときのみビューを動かす
@@ -507,9 +538,16 @@
       ? (contentEl.querySelector<HTMLElement>("[data-source-content]") ?? contentEl)
       : contentEl;
 
+    const controller = new AbortController();
     void Promise.all([
-      applyHighlights(searchRoot, query, useRegex, () => generation !== searchGeneration),
-      buildSearchResults(rawForResults, query, useRegex),
+      applyHighlights(
+        searchRoot,
+        query,
+        useRegex,
+        () => generation !== searchGeneration,
+        controller.signal
+      ),
+      buildSearchResults(rawForResults, query, useRegex, controller.signal),
     ]).then(([highlightResult, resultList]) => {
       if (generation !== searchGeneration) return;
       currentMarks = highlightResult.marks;
@@ -532,6 +570,7 @@
 
     return () => {
       searchGeneration++;
+      controller.abort();
     };
   });
 
@@ -575,7 +614,7 @@
   }
 
   // リンクのクリックをインターセプト
-  async function handleClick(event: MouseEvent) {
+  async function handleClick(event: MouseEvent, forceOther = false) {
     const target = event.target as HTMLElement;
 
     const anchor = target.closest("a");
@@ -598,6 +637,8 @@
       const hash = hashIdx > 0 ? href.slice(hashIdx + 1) : "";
       const tab = activeTab;
       if (!tab?.document || !tab.source) return;
+      const openOther = forceOther || event.shiftKey;
+      const openTarget = openOther ? captureOtherTarget(paneId) : captureOpenTarget(paneId);
       const currentPath = tab.path;
       let resolvedDocument = resolveDocumentTarget(tab.source, tab.document, filePart);
       if (resolvedDocument) {
@@ -616,20 +657,22 @@
       }
 
       // 同一ファイルへのリンクはアンカースクロールのみ
-      if (resolvedDocument && documentKey(resolvedDocument) === currentPath && hash) {
+      if (!openOther && resolvedDocument && documentKey(resolvedDocument) === currentPath && hash) {
         scrollToAnchor(contentEl, hash);
         return;
       }
 
       if (resolvedDocument) {
-        if (hash) pendingAnchor = hash;
-        openSourceMarkdown(resolvedDocument, tab.source).catch(async (err) => {
-          pendingAnchor = null;
-          await message(m.dialog.openFileFailed(resolvedDocument.path, err), {
-            title: m.common.error,
-            kind: "error",
+        openSourceMarkdown(resolvedDocument, tab.source, undefined, openTarget)
+          .then((opened) => {
+            if (opened && hash) navigateOpenedAnchor(openTarget, hash);
+          })
+          .catch(async (err) => {
+            await message(m.dialog.openFileFailed(resolvedDocument.path, err), {
+              title: m.common.error,
+              kind: "error",
+            });
           });
-        });
         return;
       }
 
@@ -659,14 +702,17 @@
 
       const stat = await invoke<{ is_dir: boolean } | null>("stat_path", { path: resolved });
       if (stat?.is_dir) resolved = `${resolved.replace(/\/$/, "")}/index.md`;
-      if (hash) pendingAnchor = hash;
-      openMarkdownFile(resolved).catch(async (err) => {
-        pendingAnchor = null;
-        await message(m.dialog.openFileFailed(resolved, err), {
-          title: m.common.error,
-          kind: "error",
+      if (!openTarget.valid() || activeTab?.id !== tab.id) return;
+      openMarkdownFile(resolved, openTarget)
+        .then((opened) => {
+          if (opened && hash) navigateOpenedAnchor(openTarget, hash);
+        })
+        .catch(async (err) => {
+          await message(m.dialog.openFileFailed(resolved, err), {
+            title: m.common.error,
+            kind: "error",
+          });
         });
-      });
     }
   }
 
@@ -675,8 +721,15 @@
     if (!tab?.path) return;
     void showViewerContextMenu({
       event,
+      openOther: (event.target as Element)?.closest('a[href]:not([href^="http"]):not([href^="#"])')
+        ? () => {
+            if (activeTab?.id === tab.id && contentEl.contains(event.target as Node))
+              void handleClick(event, true);
+          }
+        : undefined,
       contentEl,
       activeTab: {
+        id: tab.id,
         nativePath:
           tab.document && tab.source ? nativeDocumentPath(tab.source, tab.document) : null,
         canOpenExternalEditor: !!tab.source?.capabilities.externalEditor,
@@ -709,6 +762,7 @@
   }
 
   onDestroy(() => {
+    stopImageApprovals();
     renderGeneration++;
     searchGeneration++;
     cancelMarkdownRender();
@@ -732,7 +786,7 @@
         >
       </div>
     {:else}
-      <SearchBar />
+      <SearchBar {paneId} />
     {/if}
   {/if}
 
@@ -755,6 +809,8 @@
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
   <div
     bind:this={contentEl}
+    data-view-scope={paneId}
+    tabindex="-1"
     role="main"
     class="print-expand markdown-body flex-1 overflow-y-auto px-8 py-6"
     class:selectable-content={!isLoading && !!activeContent}

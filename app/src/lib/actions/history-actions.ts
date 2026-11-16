@@ -1,3 +1,5 @@
+import { captureOpenTarget } from "./workspace-actions";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { historyStore } from "$lib/stores/history.svelte";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { openMarkdownFile, openSourceMarkdown } from "$lib/actions/file-actions";
@@ -15,13 +17,18 @@ import {
  * 同方向の次のエントリを試す（エラーダイアログは出さない）。
  */
 export async function navigateHistory(direction: 1 | -1): Promise<void> {
+  const paneId = workspaceStore.activePaneId;
+  const history = historyStore.forPane(paneId);
+  const tabs = tabStore.forPane(paneId);
+  const target = captureOpenTarget(paneId);
   for (;;) {
-    const path = historyStore.step(direction);
+    if (!target.valid()) return;
+    const path = history.step(direction);
     if (!path) return;
 
-    const tab = tabStore.tabs.find((t) => t.path === path);
+    const tab = tabs.tabs.find((t) => t.path === path);
     if (tab) {
-      tabStore.setActive(tab.id);
+      tabs.setActive(tab.id, false);
       return;
     }
 
@@ -29,7 +36,7 @@ export async function navigateHistory(direction: 1 | -1): Promise<void> {
       const remembered = getRememberedDocument(path);
       if (remembered) {
         try {
-          await openSourceMarkdown(remembered.document, remembered.source);
+          await openSourceMarkdown(remembered.document, remembered.source, undefined, target);
         } catch (error) {
           if (remembered.source.kind !== "zip") throw error;
           // Explorerと最後のタブを閉じるとZIP索引は解放される。履歴から戻る場合は、
@@ -38,15 +45,15 @@ export async function navigateHistory(direction: 1 | -1): Promise<void> {
           const document = { sourceId: source.id, path: remembered.document.path };
           const restoredPath = documentKey(document);
           rememberDocument(document, source);
-          historyStore.replaceCurrent(restoredPath);
-          await openSourceMarkdown(document, source);
+          history.replaceCurrent(restoredPath);
+          await openSourceMarkdown(document, source, undefined, target);
         }
       } else {
-        await openMarkdownFile(path);
+        await openMarkdownFile(path, target);
       }
       return;
     } catch {
-      historyStore.dropCurrent(direction);
+      history.dropCurrent(direction);
     }
   }
 }

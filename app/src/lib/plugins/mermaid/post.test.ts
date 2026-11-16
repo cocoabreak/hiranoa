@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { renderAllPending } from "./post";
+import { renderAllPending, setupLazyMermaid } from "./post";
 
 const { initializeMock, renderMock } = vi.hoisted(() => ({
   initializeMock: vi.fn(),
@@ -70,5 +70,50 @@ describe("Mermaid post renderer", () => {
     expect(diagram).toHaveClass("mermaid-error-container");
     expect(diagram).toHaveTextContent("Mermaid レンダリング失敗");
     expect(diagram.querySelector("pre")).toHaveTextContent("flowchart TD");
+  });
+
+  it("位置復元等で購読を作り直しても処理中の図を再試行し、旧結果で上書きしない", async () => {
+    type ObserverCallback = (entries: { target: Element; isIntersecting: boolean }[]) => void;
+    let intersect!: ObserverCallback;
+    class Observer {
+      constructor(callback: ObserverCallback) {
+        intersect = callback;
+      }
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("IntersectionObserver", Observer);
+    const container = document.createElement("main");
+    container.innerHTML = '<div class="mermaid-pending" data-code="graph%20LR%3B%20A--%3EB"></div>';
+    const diagram = container.firstElementChild as HTMLElement;
+    document.body.append(container);
+    let finish!: (value: { svg: string }) => void;
+    renderMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        })
+    );
+    const enter = () => intersect([{ target: diagram, isIntersecting: true }]);
+    try {
+      const stop = setupLazyMermaid(container, "ja");
+      enter();
+      await vi.waitFor(() => expect(renderMock).toHaveBeenCalledOnce());
+      stop();
+      expect(diagram).toHaveClass("mermaid-pending");
+      renderMock.mockResolvedValueOnce({ svg: "<svg><text>New</text></svg>" });
+      const stopNext = setupLazyMermaid(container, "ja");
+      enter();
+      await vi.waitFor(() => expect(diagram).toHaveClass("mermaid-rendered"));
+      finish({ svg: "<svg><text>Old</text></svg>" });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(diagram).toHaveTextContent("New");
+      expect(diagram).not.toHaveTextContent("Old");
+      stopNext();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

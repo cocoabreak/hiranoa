@@ -1,3 +1,4 @@
+import { captureOpenTarget, captureOtherTarget } from "$lib/actions/workspace-actions";
 import { invoke } from "@tauri-apps/api/core";
 import { explorerStore } from "./explorer.svelte";
 import { openSourceMarkdown } from "$lib/actions/file-actions";
@@ -102,28 +103,32 @@ export class GlobalSearchStore {
     this.truncated = false;
   }
 
-  async openMatch(result: SearchResult, lineNumber: number): Promise<boolean> {
+  async openMatch(result: SearchResult, lineNumber: number, other = false): Promise<boolean> {
+    const target = other ? captureOtherTarget() : captureOpenTarget();
+    const query = this.query;
+    const isRegex = this.isRegex;
     // 1. ファイルを開く
     const source = explorerStore.source;
     const sourceScope = source ? `${source.id}:${source.generation ?? 0}` : null;
     if (!source || result.document.sourceId !== source.id || this.sourceScope !== sourceScope)
       return false;
     try {
-      await openSourceMarkdown(result.document, source);
+      if (!(await openSourceMarkdown(result.document, source, undefined, target))) return false;
     } catch (error) {
       this.error = String(error);
       return false;
     }
 
     // 2. ページ内検索のUIを開き、マッチしたキーワードをセットする
-    searchStore.openSearch();
+    const search = searchStore.forPane(target.paneId!);
+    search.openSearch();
     // もし正規表現モードなら検索文字列として正規表現の構文がそのまま入るため
     // ページ内検索も正規表現モードにする
-    searchStore.setRegex(this.isRegex);
+    search.setRegex(isRegex);
     // 該当行にジャンプするための行番号をセット
-    searchStore.setTargetLine(lineNumber);
+    search.setTargetLine(lineNumber);
     // クエリを更新（更新されるとページ内の該当箇所にスクロール＆ハイライトされる）
-    searchStore.setQuery(this.query);
+    search.setQuery(query);
     return true;
   }
 }

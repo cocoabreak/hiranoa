@@ -48,7 +48,7 @@ export function setupLinkPreviewTrigger(
   context: LinkPreviewTriggerContext
 ): () => void {
   const store = context.store ?? linkPreviewStore;
-  store.syncScope(context.current.sourceId, context.sourceGeneration);
+
   let activeAnchor: HTMLAnchorElement | null = null;
   let stopWatching: (() => void) | null = null;
   let startedAt = 0;
@@ -122,7 +122,7 @@ export function setupLinkPreviewTrigger(
     if (activeAnchor !== anchor || pointerActive || focusActive) return;
     clearWatcher();
     activeAnchor = null;
-    store.hide();
+    store.hideFromOrigin(anchor);
   }
 
   function onPointerOver(event: PointerEvent): void {
@@ -169,8 +169,8 @@ export function setupLinkPreviewTrigger(
   container.addEventListener("focusout", onFocusOut);
   container.addEventListener("keydown", onKeyDown);
   return () => {
+    store.closeFrom(container);
     clearWatcher();
-    store.close();
     container.removeEventListener("pointerover", onPointerOver);
     container.removeEventListener("pointerout", onPointerOut);
     container.removeEventListener("focusin", onFocusIn);

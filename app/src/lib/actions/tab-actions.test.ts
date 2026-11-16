@@ -76,7 +76,9 @@ describe("reopenRecentlyClosedTab", () => {
     await expect(reopenRecentlyClosedTab()).resolves.toBe(true);
     expect(openSourceMarkdown).toHaveBeenCalledWith(
       { sourceId: "native", path: "guide/closed.md" },
-      source
+      source,
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
     expect(tabStore.tabs.map((current) => current.id)).toEqual(["first", "restored", "last"]);
     expect(tabStore.tabs[1].viewMode).toBe("source");
@@ -106,7 +108,9 @@ describe("reopenRecentlyClosedTab", () => {
     expect(registerZipSource).toHaveBeenCalledWith("C:/notes/archive.zip");
     expect(openSourceMarkdown).toHaveBeenCalledWith(
       { sourceId: "new-zip", path: "README.md" },
-      registered
+      registered,
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
   });
 
@@ -152,13 +156,16 @@ describe("reopenRecentlyClosedTab", () => {
     await Promise.resolve();
     expect(openMarkdownFile).not.toHaveBeenCalled();
 
+    await vi.waitFor(() => expect(finishUnwatch).toBeDefined());
     finishUnwatch?.();
     await closing;
     await expect(reopening).resolves.toBe(true);
     expect(registerZipSource).toHaveBeenCalledWith("C:/notes/archive.zip");
     expect(openSourceMarkdown).toHaveBeenCalledWith(
       { sourceId: "zip-reopened", path: "README.md" },
-      registered
+      registered,
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
   });
 });

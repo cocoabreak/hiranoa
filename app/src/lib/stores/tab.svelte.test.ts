@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { workspaceStore } from "./workspace.svelte";
 import { tabStore } from "./tab.svelte";
 import type { DocumentSourceInfo, Tab } from "$lib/types";
 
@@ -176,7 +177,8 @@ describe("tabStore", () => {
       source: rootSource,
       document: { sourceId: rootSource.id, path: "guide/note.md" },
     });
-    tabStore.addOrActivate({
+    const otherPane = workspaceStore.addPane()!;
+    tabStore.forPane(otherPane).addOrActivate({
       id: "2",
       path: "nested:note.md",
       title: "note.md",
@@ -218,9 +220,10 @@ describe("tabStore", () => {
     });
 
     const closing = tabStore.closeAndUnwatch("closing");
-    expect(tabStore.tabs.map((tab) => tab.id)).toEqual(["closing"]);
+    expect(tabStore.tabs).toEqual([]);
     tabStore.togglePin("closing");
-    expect(tabStore.tabs[0].pinned).toBeFalsy();
+    expect(tabStore.tabs).toEqual([]);
+    await vi.waitFor(() => expect(finishUnwatch).toBeDefined());
 
     finishUnwatch?.();
     await closing;

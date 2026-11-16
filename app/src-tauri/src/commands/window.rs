@@ -17,6 +17,7 @@ const LINK_GRAPH_OPEN_DOCUMENT_EVENT: &str = "link-graph-open-document";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LinkGraphWindowContext {
+    pane_id: String,
     document: DocumentRef,
     source_generation: u64,
     revision: u64,
@@ -166,6 +167,13 @@ pub fn update_link_graph_window_context(
 ) -> Result<LinkGraphWindowSnapshot, String> {
     require_window(&window, MAIN_WINDOW_LABEL)?;
     let mut current = state.0.lock().map_err(|error| error.to_string())?;
+    if update
+        .context
+        .as_ref()
+        .is_some_and(|context| context.pane_id.is_empty() || context.pane_id.len() > 64)
+    {
+        return Err("ペイン識別子が不正です".to_string());
+    }
     Ok(apply_context_update(&mut current, update))
 }
 
@@ -322,6 +330,7 @@ mod tests {
         };
         let mut inner = LinkGraphWindowStateInner::default();
         inner.snapshot.context = Some(LinkGraphWindowContext {
+            pane_id: "primary".to_string(),
             document: current_document.clone(),
             source_generation: 0,
             revision: 0,

@@ -1,12 +1,16 @@
+import { openOtherPaneLabel } from "$lib/pane-labels";
+import { logicalElementId } from "$lib/markdown/view-dom";
 import { i18n } from "$lib/i18n/index.svelte";
 import type { DocumentRef, DocumentSourceInfo, RenderMode, TocHeading, ViewMode } from "$lib/types";
 import { createReferenceSubmenu } from "$lib/actions/reference-menu";
 
 interface ViewerContextMenuParams {
   event: MouseEvent;
+  openOther?: () => void;
   /** 右クリック位置の探索上限となるコンテンツルート要素 */
   contentEl: HTMLElement;
   activeTab: {
+    id?: string;
     nativePath?: string | null;
     canOpenExternalEditor: boolean;
     title: string;
@@ -48,7 +52,7 @@ export function findTargetHeading(
   return {
     level: Number.parseInt(heading.tagName.slice(1), 10),
     text: heading.textContent?.trim() ?? "",
-    id: heading.id,
+    id: logicalElementId(heading),
   };
 }
 
@@ -60,6 +64,9 @@ export function findTargetHeading(
 export async function showViewerContextMenu(params: ViewerContextMenuParams): Promise<void> {
   const { event, contentEl, activeTab, renderedHtml, renderMode, viewMode } = params;
   const m = i18n.m;
+  const openLabel = openOtherPaneLabel(
+    contentEl.closest<HTMLElement>("[data-pane-id]")?.dataset.paneId
+  );
   const targetSvg = findTargetSvg(event, contentEl);
   const hasRenderedContent = hasRenderedContextContent(renderMode, viewMode);
 
@@ -79,6 +86,9 @@ export async function showViewerContextMenu(params: ViewerContextMenuParams): Pr
       await PredefinedMenuItem.new({ item: "SelectAll", text: m.contextMenu.selectAll }),
       await PredefinedMenuItem.new({ item: "Separator" }),
     ];
+
+    if (params.openOther)
+      items.push(await MenuItem.new({ text: openLabel, action: params.openOther }));
 
     if (activeTab.document && activeTab.source) {
       items.push(
@@ -118,7 +128,7 @@ export async function showViewerContextMenu(params: ViewerContextMenuParams): Pr
     items.push(
       await MenuItem.new({
         text: m.contextMenu.print,
-        action: () => printDocument(),
+        action: () => printDocument(contentEl, activeTab.id),
       }),
       await PredefinedMenuItem.new({ item: "Separator" })
     );

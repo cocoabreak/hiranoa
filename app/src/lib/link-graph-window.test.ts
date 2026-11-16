@@ -9,6 +9,7 @@ import {
 const snapshot: LinkGraphWindowSnapshot = {
   contextVersion: 4,
   context: {
+    paneId: "primary",
     document: { sourceId: "source-1", path: "current.md" },
     sourceGeneration: 0,
     revision: 2,

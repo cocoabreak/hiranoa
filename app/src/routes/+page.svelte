@@ -6,8 +6,8 @@
   import Sidebar from "$lib/components/Sidebar.svelte";
   import TocPanel from "$lib/components/TocPanel.svelte";
   import Titlebar from "$lib/components/Titlebar.svelte";
-  import TabBar from "$lib/components/TabBar.svelte";
-  import MarkdownViewer from "$lib/components/MarkdownViewer.svelte";
+  import WorkspaceView from "$lib/components/WorkspaceView.svelte";
+  import { workspaceStore } from "$lib/stores/workspace.svelte";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import SettingsPanel from "$lib/components/SettingsPanel.svelte";
   import Lightbox from "$lib/components/Lightbox.svelte";
@@ -19,7 +19,6 @@
   import LinkPreviewPopover from "$lib/components/LinkPreviewPopover.svelte";
   import { settingsStore } from "$lib/stores/settings.svelte";
   import { tabStore } from "$lib/stores/tab.svelte";
-  import { contentStore } from "$lib/stores/content.svelte";
   import { explorerStore } from "$lib/stores/explorer.svelte";
   import { uiStore } from "$lib/stores/ui.svelte";
   import { lightboxStore } from "$lib/stores/lightbox.svelte";
@@ -35,9 +34,10 @@
     openLargeMarkdownInSafeModeForE2e,
     openMarkdownFile,
     openSourceMarkdown,
-    readSourceMarkdown,
   } from "$lib/actions/file-actions";
   import { nativeDocumentPath, nativePathsEqual } from "$lib/document-sources";
+  import { captureOpenTarget } from "$lib/actions/workspace-actions";
+  import { refreshDocumentViews } from "$lib/actions/refresh-document-views";
   import { SerializedTaskQueue } from "$lib/serialized-task-queue";
   import { refreshDirectory, reloadFolderTree } from "$lib/actions/explorer-actions";
   import { authorizeDevPath, authorizePath } from "$lib/actions/security";
@@ -87,10 +87,22 @@
   let cliWakePending = false;
   let cliDrainChain = Promise.resolve();
   let compactToc = $state(false);
+  let mediaCompactToc = $state(false);
+  let contentWidth = $state(0);
+  $effect(() => {
+    compactToc =
+      mediaCompactToc ||
+      (workspaceStore.paneIds.length === 2 &&
+        contentWidth > 0 &&
+        contentWidth -
+          (settingsStore.settings.sidebarVisible ? settingsStore.settings.sidebarWidth : 0) -
+          (settingsStore.settings.tocVisible ? settingsStore.settings.tocWidth : 0) <
+          850);
+  });
   let tocMediaQuery: MediaQueryList | undefined;
 
   function syncTocLayout(event: MediaQueryList | MediaQueryListEvent) {
-    compactToc = event.matches;
+    mediaCompactToc = event.matches;
   }
 
   function currentLinkGraphContext(): LinkGraphWindowContext | null {
@@ -98,6 +110,7 @@
     if (!active?.document || !active.source) return null;
     return {
       document: active.document,
+      paneId: workspaceStore.activePaneId,
       sourceGeneration: active.source.generation ?? 0,
       revision: linkInspectorStore.revision,
       showHiddenFiles: settingsStore.settings.showHiddenFiles,
@@ -145,6 +158,7 @@
   async function processPaths(paths: string[]) {
     if (!paths || paths.length === 0) return;
     let folderOpened = false;
+    const openTarget = captureOpenTarget();
 
     for (const rawPath of paths.slice(0, 32)) {
       const path = normalizePath(rawPath);
@@ -160,7 +174,7 @@
         } else if (stat.is_file) {
           if (isMarkdownPath(path)) {
             if (!(await authorizePath(path))) continue;
-            await openMarkdownFile(path);
+            await openMarkdownFile(path, openTarget);
             sessionRestorePromptStore.hide();
           } else if (path.toLowerCase().endsWith(".zip") && !folderOpened) {
             const { openArchive } = await import("$lib/actions/dialog-actions");
@@ -359,7 +373,7 @@
         },
         resetSession: async () => {
           const source = explorerStore.source;
-          for (const tab of [...tabStore.tabs].reverse()) await tabStore.closeAndUnwatch(tab.id);
+          for (const tab of [...tabStore.allTabs].reverse()) await tabStore.closeAndUnwatch(tab.id);
           explorerStore.clear();
           if (source) {
             await invoke("unwatch_path", { path: source.nativePath }).catch(() => {});
@@ -408,9 +422,15 @@
   // セッション復元の確認トースト表示中は、まだ何も開いていない空状態で
   // tabs.jsonを上書きしてしまわないよう保存を止める
   $effect(() => {
-    if (!hydrated || sessionRestorePromptStore.visible) return;
-    void tabStore.tabs;
-    void tabStore.activeTabId;
+    if (!hydrated || sessionRestorePromptStore.visible || sessionRestorePromptStore.restoring)
+      return;
+    for (const id of workspaceStore.paneIds) {
+      void tabStore.forPane(id).tabs;
+      void tabStore.forPane(id).activeTabId;
+      void searchStore.forPane(id).sessionState;
+    }
+    void workspaceStore.activePaneId;
+    void workspaceStore.splitRatio;
     void explorerStore.rootPath;
     void explorerStore.expandedDirs;
     void searchStore.open;
@@ -426,11 +446,15 @@
   // record内で履歴ストアのentries/indexを読むため、untrackしないとそれらが
   // このeffectの依存になり、step()によるindex変化で再発火して重複記録される
   $effect(() => {
-    const active = tabStore.tabs.find((t) => t.id === tabStore.activeTabId);
-    if (active) untrack(() => historyStore.record(active.path));
+    for (const id of workspaceStore.paneIds) {
+      const tabs = tabStore.forPane(id);
+      const active = tabs.tabs.find((t) => t.id === tabs.activeTabId);
+      if (active) untrack(() => historyStore.forPane(id).record(active.path));
+    }
   });
 
   $effect(() => {
+    void workspaceStore.activePaneId;
     void tabStore.activeTabId;
     void tabStore.tabs;
     void linkInspectorStore.revision;
@@ -506,7 +530,7 @@
         const normalizedChangedPath = normalizePath(changedPath);
         try {
           const zipSources = new Map(
-            [explorerStore.source, ...tabStore.tabs.map((tab) => tab.source)]
+            [explorerStore.source, ...tabStore.allTabs.map((tab) => tab.source)]
               .filter(
                 (source) =>
                   source?.kind === "zip" &&
@@ -536,38 +560,22 @@
                     }
                   }
                   explorerStore.updateSource(refreshedSource);
-                  for (const candidate of tabStore.tabs.filter(
+                  for (const candidate of tabStore.allTabs.filter(
                     (tab) => tab.source?.id === source.id
                   )) {
                     tabStore.updateTab(candidate.id, { source: refreshedSource });
                   }
                   if (explorerStore.source?.id === source.id) await reloadFolderTree();
-                  for (const tab of tabStore.tabs.filter(
-                    (candidate) => candidate.source?.id === source.id
-                  )) {
-                    if (!tab.document) continue;
-                    try {
-                      const loaded = await readSourceMarkdown(tab.document, tab.path, {
-                        currentMode: tab.renderMode ?? "full",
-                        reason: "watch",
-                      });
-                      if (!loaded) continue;
-                      contentStore.set(tab.path, {
-                        raw: loaded.raw,
-                        safeOutline: loaded.safeOutline,
-                        safeOutlineTruncated: loaded.safeOutlineTruncated,
-                      });
-                      tabStore.updateTab(tab.id, { status: "ok", renderMode: loaded.renderMode });
-                    } catch {
-                      tabStore.updateTab(tab.id, { status: "deleted" });
-                    }
-                  }
+                  await refreshDocumentViews(
+                    tabStore.allTabs.filter((candidate) => candidate.source?.id === source.id),
+                    true
+                  );
                 })
               )
             );
             return;
           }
-          const matchingTabs = tabStore.tabs.filter(
+          const matchingTabs = tabStore.allTabs.filter(
             (candidate) =>
               !!candidate.document &&
               !!candidate.source &&
@@ -577,28 +585,7 @@
                 normalizedChangedPath
               )
           );
-          for (const tab of matchingTabs) {
-            if (!tab.document) continue;
-            try {
-              const modeAtReadStart = tab.renderMode ?? "full";
-              const loaded = await readSourceMarkdown(tab.document, tab.path, {
-                currentMode: modeAtReadStart,
-                reason: "watch",
-              });
-              if (loaded === undefined) continue;
-              const current = tabStore.tabs.find((candidate) => candidate.id === tab.id);
-              if (!current || current.path !== tab.path) continue;
-              if ((current.renderMode ?? "full") !== modeAtReadStart) continue;
-              contentStore.set(tab.path, {
-                raw: loaded.raw,
-                safeOutline: loaded.safeOutline,
-                safeOutlineTruncated: loaded.safeOutlineTruncated,
-              });
-              tabStore.updateTab(tab.id, { renderMode: loaded.renderMode, status: "ok" });
-            } catch {
-              // 同じ実ファイルを参照する他タブの更新は継続する。
-            }
-          }
+          await refreshDocumentViews(matchingTabs);
         } catch {
           // 読み込み失敗時は無視
         }
@@ -612,7 +599,7 @@
         const deletedPath = event.payload;
         const normalizedDeletedPath = normalizePath(deletedPath);
         const deletedArchiveSourceIds = new Set(
-          [explorerStore.source, ...tabStore.tabs.map((tab) => tab.source)]
+          [explorerStore.source, ...tabStore.allTabs.map((tab) => tab.source)]
             .filter(
               (source) =>
                 source?.kind === "zip" && nativePathsEqual(source.nativePath, normalizedDeletedPath)
@@ -620,14 +607,14 @@
             .map((source) => source!.id)
         );
         if (deletedArchiveSourceIds.size > 0) {
-          for (const archiveTab of tabStore.tabs.filter((candidate) =>
+          for (const archiveTab of tabStore.allTabs.filter((candidate) =>
             deletedArchiveSourceIds.has(candidate.source?.id ?? "")
           )) {
             tabStore.updateTab(archiveTab.id, { status: "deleted" });
           }
           return;
         }
-        const matchingTabs = tabStore.tabs.filter(
+        const matchingTabs = tabStore.allTabs.filter(
           (candidate) =>
             !!candidate.document &&
             !!candidate.source &&
@@ -667,15 +654,12 @@
 
 <div class="print-expand flex h-screen flex-col overflow-hidden bg-background text-foreground">
   <Titlebar />
-  <div class="print-expand relative flex min-h-0 flex-1">
+  <div bind:clientWidth={contentWidth} class="print-expand relative flex min-h-0 flex-1">
     {#if settingsStore.settings.sidebarVisible}
       <Sidebar />
     {/if}
 
-    <div class="print-expand flex min-w-0 flex-1 flex-col">
-      <TabBar />
-      <MarkdownViewer />
-    </div>
+    <WorkspaceView />
 
     <TocPanel compact={compactToc} />
   </div>

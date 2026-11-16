@@ -127,14 +127,18 @@ describe("LinkInspectorPanel", () => {
     await fireEvent.click(target);
     expect(openSourceMarkdown).toHaveBeenCalledWith(
       { sourceId: source.id, path: "guide/target.md" },
-      source
+      source,
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
 
     await fireEvent.click(view.getByRole("tab", { name: /Incoming/ }));
     await fireEvent.click(view.getByRole("button", { name: /referrer\.md/ }));
     expect(openSourceMarkdown).toHaveBeenLastCalledWith(
       { sourceId: source.id, path: "guide/referrer.md" },
-      source
+      source,
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
 
     await fireEvent.click(view.getByRole("tab", { name: /Problems/ }));

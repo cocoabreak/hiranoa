@@ -1,3 +1,4 @@
+import { createPaneScopedStore } from "./workspace.svelte";
 import type { SearchResultItem } from "$lib/markdown/search-results";
 
 export interface PersistedSearchState {
@@ -159,4 +160,4 @@ function createSearchStore() {
   };
 }
 
-export const searchStore = createSearchStore();
+export const searchStore = createPaneScopedStore(createSearchStore);

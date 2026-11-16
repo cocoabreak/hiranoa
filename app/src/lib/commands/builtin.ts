@@ -1,3 +1,12 @@
+import { openOtherPaneLabel, moveOtherPaneLabel } from "$lib/pane-labels";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
+import {
+  copyTabToOther,
+  splitView,
+  unsplitView,
+  focusOtherPane,
+  moveTabToOther,
+} from "$lib/actions/workspace-actions";
 import { registerCommand } from "./registry";
 import { openArchiveDialog, openFileDialog, openFolderDialog } from "$lib/actions/dialog-actions";
 import { openExternalEditor } from "$lib/actions/file-actions";
@@ -232,5 +241,39 @@ registerCommand({
   run: () => {
     settingsStore.resetZoom();
     saveSettings();
+  },
+});
+
+registerCommand({
+  id: "view.split",
+  label: () =>
+    workspaceStore.paneIds.length === 1 && tabStore.activeTabId ? i18n.m.split.split : null,
+  run: splitView,
+});
+registerCommand({
+  id: "view.unsplit",
+  label: () => (workspaceStore.paneIds.length === 2 ? i18n.m.split.unsplit : null),
+  run: unsplitView,
+});
+registerCommand({
+  id: "view.focusOther",
+  label: () => (workspaceStore.paneIds.length === 2 ? i18n.m.split.focus : null),
+  run: focusOtherPane,
+});
+registerCommand({
+  id: "view.moveTabOther",
+  label: () =>
+    workspaceStore.paneIds.length === 2 && tabStore.activeTabId ? moveOtherPaneLabel() : null,
+  run: () => {
+    if (tabStore.activeTabId) moveTabToOther(workspaceStore.activePaneId, tabStore.activeTabId);
+  },
+});
+
+registerCommand({
+  id: "view.openTabOther",
+  label: () =>
+    workspaceStore.paneIds.length === 2 && tabStore.activeTabId ? openOtherPaneLabel() : null,
+  run: () => {
+    if (tabStore.activeTabId) copyTabToOther(workspaceStore.activePaneId, tabStore.activeTabId);
   },
 });

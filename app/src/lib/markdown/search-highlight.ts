@@ -103,8 +103,10 @@ function findRegexMatchesSync(
 function findRegexMatches(
   texts: string[],
   query: string,
-  maxMatches: number
+  maxMatches: number,
+  signal?: AbortSignal
 ): Promise<TextSearchResponse> {
+  if (signal?.aborted) return Promise.resolve({ matches: [], error: null, truncated: false });
   // jsdom等Workerを持たないテスト環境では、安全な小さいfixtureだけ同期評価する。
   if (typeof Worker === "undefined") {
     return Promise.resolve(findRegexMatchesSync(texts, query, maxMatches));
@@ -114,7 +116,14 @@ function findRegexMatches(
     const worker = new Worker(new URL("./search-regex.worker.ts", import.meta.url), {
       type: "module",
     });
+    const abort = () => {
+      window.clearTimeout(timeout);
+      worker.terminate();
+      resolve({ matches: [], error: null, truncated: false });
+    };
+    signal?.addEventListener("abort", abort, { once: true });
     const timeout = window.setTimeout(() => {
+      signal?.removeEventListener("abort", abort);
       worker.terminate();
       resolve({
         matches: [],
@@ -123,11 +132,13 @@ function findRegexMatches(
       });
     }, REGEX_TIMEOUT_MS);
     worker.onmessage = (event: MessageEvent<TextSearchResponse>) => {
+      signal?.removeEventListener("abort", abort);
       window.clearTimeout(timeout);
       worker.terminate();
       resolve(event.data);
     };
     worker.onerror = () => {
+      signal?.removeEventListener("abort", abort);
       window.clearTimeout(timeout);
       worker.terminate();
       resolve({ matches: [], error: "正規表現の処理に失敗しました", truncated: false });
@@ -140,11 +151,12 @@ export function findTextMatches(
   texts: string[],
   query: string,
   useRegex: boolean,
-  maxMatches = MAX_SEARCH_MATCHES
+  maxMatches = MAX_SEARCH_MATCHES,
+  signal?: AbortSignal
 ): Promise<TextSearchResponse> {
   if (!query) return Promise.resolve({ matches: [], error: null, truncated: false });
   return useRegex
-    ? findRegexMatches(texts, query, maxMatches)
+    ? findRegexMatches(texts, query, maxMatches, signal)
     : Promise.resolve(findLiteralMatches(texts, query, maxMatches));
 }
 
@@ -153,7 +165,8 @@ export async function applyHighlights(
   container: HTMLElement,
   query: string,
   useRegex: boolean,
-  isCancelled: () => boolean = () => false
+  isCancelled: () => boolean = () => false,
+  signal?: AbortSignal
 ): Promise<HighlightResult> {
   if (!query) return { marks: [], error: null, truncated: false };
 
@@ -163,7 +176,7 @@ export async function applyHighlights(
   while ((node = walker.nextNode())) textNodes.push(node as Text);
 
   const texts = textNodes.map((textNode) => textNode.textContent ?? "");
-  const result = await findTextMatches(texts, query, useRegex);
+  const result = await findTextMatches(texts, query, useRegex, MAX_SEARCH_MATCHES, signal);
   if (result.error || isCancelled()) {
     return { marks: [], error: result.error, truncated: result.truncated };
   }

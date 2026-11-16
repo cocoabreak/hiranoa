@@ -28,15 +28,15 @@ export function setupImageLightboxTrigger(container: HTMLElement): () => void {
     wrapper.className = "lightbox-trigger-wrapper";
     img.parentElement?.insertBefore(wrapper, img);
     wrapper.appendChild(img);
-    wrapper.appendChild(createExpandButton(() => lightboxStore.openImage(img.src, img.alt)));
+    wrapper.appendChild(createExpandButton(() => lightboxStore.openImage(img.src, img.alt, img)));
   });
 
-  return () => {};
+  return () => lightboxStore.closeFrom(container);
 }
 
 /** Mermaidが遅延レンダリングされた直後に plugins/mermaid/post.ts から呼び出し、展開アイコンを追加する */
 export function addMermaidExpandButton(mermaidEl: HTMLElement): void {
   const svg = mermaidEl.querySelector("svg");
   if (!svg) return;
-  mermaidEl.appendChild(createExpandButton(() => lightboxStore.openSvg(svg.outerHTML)));
+  mermaidEl.appendChild(createExpandButton(() => lightboxStore.openSvg(svg.outerHTML, svg)));
 }

@@ -82,6 +82,9 @@ function getHighlighter(): Promise<HighlighterCore> {
       themes: Object.values(HIGHLIGHT_THEME_LOADERS).map((load) => load()),
       langs: Object.values(HIGHLIGHT_LANG_LOADERS).map((load) => load()),
       engine: createOnigurumaEngine(getWasm),
+    }).catch((error) => {
+      highlighterPromise = null;
+      throw error;
     });
   }
   return highlighterPromise;
@@ -99,14 +102,6 @@ function isPluginEnabled(plugin: ViewerPlugin, renderers: Record<string, boolean
   return renderers[plugin.name] ?? plugin.defaultEnabled;
 }
 
-// 進行中のレンダリングをキャンセルするためのバージョン管理
-let currentRenderVersion = 0;
-
-/** await区間にある進行中レンダリングを、同期HTML生成へ進む前に無効化する。 */
-export function cancelMarkdownRender(): void {
-  currentRenderVersion++;
-}
-
 export interface RenderResult {
   html: string;
   frontmatter: Record<string, unknown> | null;
@@ -116,7 +111,7 @@ export interface RenderResult {
 // new MarkdownIt() とプラグイン適用は比較的重く、ファイル切替のたびに作り直すと無駄なため、
 // 構成が同じ間は再利用する。テーマ・行番号などレンダリング時に変わる設定はインスタンス構造に
 // 影響しないので、fenceレンダラーが activeRenderOptions から都度読む。
-const mdCache = new Map<string, MarkdownItInstance>();
+const mdCache = new Map<string, Promise<MarkdownItInstance>>();
 
 // fenceレンダラーが参照する「現在のレンダリング設定」。md.render() は同期実行で、直前に
 // 設定してから内部でawaitを挟まないため、複数レンダリングが並行しても取り違えは起きない。
@@ -139,6 +134,18 @@ async function getMarkdownIt(
   const cached = mdCache.get(signature);
   if (cached) return cached;
 
+  const pending = buildMarkdownIt(renderers, highlighter).catch((error) => {
+    mdCache.delete(signature);
+    throw error;
+  });
+  mdCache.set(signature, pending);
+  return pending;
+}
+
+async function buildMarkdownIt(
+  renderers: Record<string, boolean>,
+  highlighter: HighlighterCore
+): Promise<MarkdownItInstance> {
   const md = new MarkdownIt({
     html: true, // ローカルファイルビューワーのため生HTMLを許可
     linkify: true,
@@ -219,38 +226,48 @@ async function getMarkdownIt(
     }
   };
 
-  mdCache.set(signature, md);
   return md;
 }
 
-export async function renderMarkdown(raw: string, options: RenderOptions): Promise<RenderResult> {
-  // このレンダリングのバージョン番号を取得
-  const version = ++currentRenderVersion;
+export function createMarkdownRenderSession() {
+  let currentRenderVersion = 0;
+  function cancel() {
+    currentRenderVersion++;
+  }
+  async function render(raw: string, options: RenderOptions): Promise<RenderResult> {
+    // このレンダリングのバージョン番号を取得
+    const version = ++currentRenderVersion;
 
-  const highlighter = await getHighlighter();
-  const md = await getMarkdownIt(options.renderers, highlighter);
+    const highlighter = await getHighlighter();
+    const md = await getMarkdownIt(options.renderers, highlighter);
 
-  // より新しいレンダリングが始まっていたらキャンセル
-  if (version !== currentRenderVersion) {
-    return { html: "", frontmatter: null };
+    // より新しいレンダリングが始まっていたらキャンセル
+    if (version !== currentRenderVersion) {
+      return { html: "", frontmatter: null };
+    }
+
+    const { data: frontmatter, content } = extractFrontmatter(raw);
+
+    // イベントループを解放してから同期レンダリングを実行
+    // （大きいファイルで render() が長時間ブロックする前に UI を更新させる）
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    if (version !== currentRenderVersion) {
+      return { html: "", frontmatter: null };
+    }
+
+    // fenceレンダラーが読む設定を、同期実行される md.render() の直前に確定させる
+    activeRenderOptions = options;
+    try {
+      return { html: sanitizeHtml(md.render(content)), frontmatter };
+    } catch (e) {
+      console.error("markdown-it render error:", e);
+      throw e;
+    }
   }
 
-  const { data: frontmatter, content } = extractFrontmatter(raw);
-
-  // イベントループを解放してから同期レンダリングを実行
-  // （大きいファイルで render() が長時間ブロックする前に UI を更新させる）
-  await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-  if (version !== currentRenderVersion) {
-    return { html: "", frontmatter: null };
-  }
-
-  // fenceレンダラーが読む設定を、同期実行される md.render() の直前に確定させる
-  activeRenderOptions = options;
-  try {
-    return { html: sanitizeHtml(md.render(content)), frontmatter };
-  } catch (e) {
-    console.error("markdown-it render error:", e);
-    throw e;
-  }
+  return { render, cancel };
 }
+const defaultRenderSession = createMarkdownRenderSession();
+export const renderMarkdown = defaultRenderSession.render;
+export const cancelMarkdownRender = defaultRenderSession.cancel;

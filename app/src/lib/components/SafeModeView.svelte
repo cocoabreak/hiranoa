@@ -16,7 +16,7 @@
 <section class="safe-mode" aria-labelledby="safe-mode-title">
   <div class="safe-mode-banner">
     <div>
-      <h2 id="safe-mode-title">{m.viewer.safeModeTitle}</h2>
+      <h2 id="safe-mode-title" class="safe-mode-title">{m.viewer.safeModeTitle}</h2>
       <p>{m.viewer.safeModeDescription}</p>
     </div>
     <button type="button" onclick={onRequestFull}>{m.viewer.safeModeShowFull}</button>
@@ -39,7 +39,7 @@
     border-radius: 0.375rem;
     background: hsl(var(--muted));
   }
-  #safe-mode-title {
+  .safe-mode-title {
     margin: 0 0 0.25rem;
     font-size: 0.875rem;
     font-weight: 600;

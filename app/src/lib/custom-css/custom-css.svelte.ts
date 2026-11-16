@@ -2,15 +2,17 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { authorizePath } from "$lib/actions/security";
 import { settingsStore } from "$lib/stores/settings.svelte";
-import { scopeCustomCss } from "./scope";
+import { prepareCustomCss } from "./scope";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
 
 const STYLE_ID = "custom-user-css";
 let unlistenChange: UnlistenFn | null = null;
+let prepared = $state<((scope?: string) => string) | null>(null);
 let applyGeneration = 0;
 let applyQueue: Promise<void> = Promise.resolve();
 
 function removeStyle() {
-  document.getElementById(STYLE_ID)?.remove();
+  document.querySelectorAll(`[id^="${STYLE_ID}"]`).forEach((style) => style.remove());
 }
 
 function createRuntimeStore() {
@@ -37,6 +39,7 @@ async function applyCustomCssGeneration(generation: number): Promise<void> {
   if (generation !== applyGeneration) return;
   await invoke("unwatch_custom_css").catch(() => {});
   if (generation !== applyGeneration) return;
+  prepared = null;
   removeStyle();
   customCssRuntimeStore.setResult(null, false);
 
@@ -48,12 +51,10 @@ async function applyCustomCssGeneration(generation: number): Promise<void> {
     if (generation !== applyGeneration) return;
     const raw = await invoke<string>("read_custom_css", { path: customCssPath });
     if (generation !== applyGeneration) return;
-    const scoped = await scopeCustomCss(raw);
+    const compiled = await prepareCustomCss(raw);
     if (generation !== applyGeneration) return;
-    const style = document.createElement("style");
-    style.id = STYLE_ID;
-    style.textContent = scoped;
-    document.head.append(style);
+    prepared = compiled;
+    applyStyles();
     await invoke("watch_custom_css", { path: customCssPath });
     if (generation !== applyGeneration) {
       removeStyle();
@@ -68,6 +69,17 @@ async function applyCustomCssGeneration(generation: number): Promise<void> {
   }
 }
 
+function applyStyles() {
+  removeStyle();
+  if (!prepared) return;
+  workspaceStore.paneIds.forEach((id, index) => {
+    const style = document.createElement("style");
+    style.id = index === 0 ? STYLE_ID : `${STYLE_ID}-${id}`;
+    style.textContent = prepared!(id);
+    document.head.append(style);
+  });
+}
+
 /** 現在の設定に従い、多重要求を直列化して最新のCSSとwatcherだけを確定する。 */
 export function applyCustomCss(): Promise<void> {
   const generation = ++applyGeneration;
@@ -78,12 +90,21 @@ export function applyCustomCss(): Promise<void> {
 
 /** CSS変更イベントの購読を開始する。アプリのルートで一度だけ呼ぶ。 */
 export async function startCustomCss(): Promise<() => void> {
+  const stopStyles = $effect.root(() => {
+    $effect(() => {
+      void workspaceStore.paneIds;
+      void prepared;
+      applyStyles();
+    });
+  });
   await applyCustomCss();
   unlistenChange?.();
   unlistenChange = await listen("custom-css-changed", () => {
     void applyCustomCss();
   });
   return () => {
+    stopStyles();
+    prepared = null;
     applyGeneration++;
     unlistenChange?.();
     unlistenChange = null;

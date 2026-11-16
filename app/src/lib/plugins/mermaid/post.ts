@@ -41,8 +41,11 @@ async function renderOne(
   el: HTMLElement,
   locale: Locale,
   externalImagesAllowed = false,
-  onExternalImagesBlocked?: (count: number) => void
+  onExternalImagesBlocked?: (count: number) => void,
+  isCurrent: () => boolean = () => true,
+  viewRoot?: HTMLElement
 ): Promise<void> {
+  if (!isCurrent()) return;
   if (!el.classList.contains("mermaid-pending")) return;
 
   const code = decodeURIComponent(el.dataset.code ?? "");
@@ -53,7 +56,8 @@ async function renderOne(
   let renderId: string | undefined;
   try {
     const mermaid = await getMermaid();
-    renderId = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    if (!isCurrent()) return;
+    renderId = `mermaid-${crypto.randomUUID()}`;
 
     // 孤立した一時要素をクリーンアップ
     document.getElementById(renderId)?.remove();
@@ -69,16 +73,22 @@ async function renderOne(
       ),
     ]);
 
+    if (!isCurrent()) return;
     const protectedResult = externalImagesAllowed
       ? { html: svg, blockedCount: 0 }
       : protectExternalImages(svg);
+    const scope = viewRoot?.dataset.viewScope;
+    const svgTools = scope ? await import("$lib/markdown/view-svg") : null;
+    if (!isCurrent()) return;
     el.innerHTML = protectedResult.html;
+    if (svgTools && scope) svgTools.namespaceGeneratedSvg(el, `view-${scope}`, viewRoot);
     if (protectedResult.blockedCount > 0) {
       onExternalImagesBlocked?.(protectedResult.blockedCount);
     }
     el.classList.replace("mermaid-processing", "mermaid-rendered");
     addMermaidExpandButton(el);
   } catch (e) {
+    if (!isCurrent()) return;
     console.warn("Mermaid render error:", e);
     const rawCode = el.dataset.code ? decodeURIComponent(el.dataset.code) : "";
     el.innerHTML = `
@@ -119,7 +129,14 @@ export async function renderAllPending(
     while (true) {
       const element = jobs[nextIndex++];
       if (!element) return;
-      await renderOne(element, locale, externalImagesAllowed, onExternalImagesBlocked);
+      await renderOne(
+        element,
+        locale,
+        externalImagesAllowed,
+        onExternalImagesBlocked,
+        () => container.contains(element),
+        container
+      );
     }
   }
   await Promise.all(
@@ -147,22 +164,26 @@ export function setupLazyMermaid(
   const pending = container.querySelectorAll<HTMLElement>(".mermaid-pending");
   if (pending.length === 0) return () => {};
 
+  let disposed = false;
+  const timers = new Set<ReturnType<typeof setTimeout>>();
   const observer = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
         if (entry.isIntersecting) {
           observer.unobserve(entry.target);
           // イベントループを解放してからレンダリング
-          setTimeout(
-            () =>
-              renderOne(
-                entry.target as HTMLElement,
-                locale,
-                externalImagesAllowed,
-                onExternalImagesBlocked
-              ),
-            0
-          );
+          const timer = setTimeout(() => {
+            timers.delete(timer);
+            void renderOne(
+              entry.target as HTMLElement,
+              locale,
+              externalImagesAllowed,
+              onExternalImagesBlocked,
+              () => !disposed && container.contains(entry.target),
+              container
+            );
+          }, 0);
+          timers.add(timer);
         }
       }
     },
@@ -171,5 +192,14 @@ export function setupLazyMermaid(
 
   pending.forEach((el) => observer.observe(el));
 
-  return () => observer.disconnect();
+  return () => {
+    disposed = true;
+    observer.disconnect();
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+    for (const element of pending) {
+      if (container.contains(element))
+        element.classList.replace("mermaid-processing", "mermaid-pending");
+    }
+  };
 }

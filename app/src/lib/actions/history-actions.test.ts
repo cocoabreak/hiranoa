@@ -66,7 +66,9 @@ describe("navigateHistory", () => {
     expect(historyStore.entries[historyStore.index]).toBe("source-new:README.md");
     expect(openSourceMarkdown).toHaveBeenLastCalledWith(
       { sourceId: "source-new", path: "README.md" },
-      expect.objectContaining({ id: "source-new" })
+      expect.objectContaining({ id: "source-new" }),
+      undefined,
+      expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
     );
   });
 });
