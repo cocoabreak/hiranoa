@@ -188,6 +188,31 @@ describe("tabs session persistence", () => {
 });
 
 describe("split session restoration", () => {
+  it("非同期読込と最終ペイン比率の確定後に保存位置を復元する", async () => {
+    const restorePositions = vi.spyOn(sessionUiStateStore, "restoreScrollPositions");
+    mockedInvoke.mockResolvedValue({
+      schemaVersion: 2,
+      workspace: {
+        panes: [
+          { tabs: [{ path: "D:/notes/a.md", pinned: false, scrollPositions: { rendered: 5000 } }] },
+          { tabs: [{ path: "D:/notes/b.md", pinned: false, scrollPositions: { source: 8000 } }] },
+        ],
+        activePaneIndex: 0,
+        splitRatio: 0.7,
+      },
+    });
+    mockedAuthorizePath.mockResolvedValue(true);
+    mockedOpenMarkdownFile.mockImplementation(async (path, target) => {
+      expect(restorePositions).not.toHaveBeenCalled();
+      tabStore.forPane(target!.paneId!).addOrActivate({ id: path, path, title: path });
+      return true;
+    });
+    await restoreSavedTabs();
+    expect(workspaceStore.splitRatio).toBe(0.7);
+    expect(restorePositions).toHaveBeenCalledWith("D:/notes/a.md", { rendered: 5000 });
+    expect(restorePositions).toHaveBeenCalledWith("D:/notes/b.md", { source: 8000 });
+    restorePositions.mockRestore();
+  });
   it("左側の全ファイルが失敗しても右側だけを残す", async () => {
     mockedInvoke.mockResolvedValue({
       schemaVersion: 2,

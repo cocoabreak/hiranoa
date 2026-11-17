@@ -21,6 +21,7 @@ import { closeFolder } from "$lib/actions/explorer-actions";
 import { toggleActiveSourceView } from "$lib/actions/view-actions";
 import { i18n } from "$lib/i18n/index.svelte";
 import { pickerStore } from "$lib/stores/picker.svelte";
+import { sessionRestorePromptStore } from "$lib/stores/session-restore-prompt.svelte";
 import { reopenRecentlyClosedTab } from "$lib/actions/tab-actions";
 import { copyReference } from "$lib/actions/reference-copy";
 import type { ReferenceFormat, ReferenceTarget } from "$lib/reference-copy";
@@ -31,6 +32,15 @@ function activeReferenceTarget(): ReferenceTarget | null {
     ? { document: tab.document, source: tab.source, title: tab.title }
     : null;
 }
+
+registerCommand({
+  id: "workspace.layouts",
+  label: () => i18n.m.layouts.title,
+  run: () => {
+    if (!sessionRestorePromptStore.visible && !sessionRestorePromptStore.restoring)
+      uiStore.openLayouts();
+  },
+});
 
 function registerDocumentReferenceCommand(
   id: string,

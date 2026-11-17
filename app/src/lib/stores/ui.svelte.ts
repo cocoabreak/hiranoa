@@ -1,9 +1,19 @@
 function createUiStore() {
   let settingsPanelOpen = $state(false);
   let aboutDialogOpen = $state(false);
+  let layoutsOpen = $state(false);
   let sidebarActiveTab = $state<"explorer" | "search" | "links">("explorer");
 
   return {
+    get layoutsOpen() {
+      return layoutsOpen;
+    },
+    openLayouts() {
+      layoutsOpen = true;
+    },
+    closeLayouts() {
+      layoutsOpen = false;
+    },
     get settingsPanelOpen() {
       return settingsPanelOpen;
     },

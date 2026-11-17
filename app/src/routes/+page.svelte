@@ -13,6 +13,7 @@
   import Lightbox from "$lib/components/Lightbox.svelte";
   import SessionRestoreToast from "$lib/components/SessionRestoreToast.svelte";
   import AboutDialog from "$lib/components/AboutDialog.svelte";
+  import WorkspaceLayoutsDialog from "$lib/components/WorkspaceLayoutsDialog.svelte";
   import UpdateNotification from "$lib/components/UpdateNotification.svelte";
   import QuickOpen from "$lib/components/QuickOpen.svelte";
   import CommandPalette from "$lib/components/CommandPalette.svelte";
@@ -164,6 +165,7 @@
       const path = normalizePath(rawPath);
       try {
         const stat = await invoke<{ is_dir: boolean; is_file: boolean }>("stat_path", { path });
+        if (!openTarget.valid()) return;
         if (!stat) continue;
 
         if (stat.is_dir && !folderOpened) {
@@ -194,10 +196,10 @@
    */
   function scheduleCliDrain(): Promise<void> {
     cliWakePending = true;
-    if (!cliProcessingReady) return cliDrainChain;
+    if (!cliProcessingReady || sessionRestorePromptStore.restoring) return cliDrainChain;
 
     cliDrainChain = cliDrainChain.then(async () => {
-      if (!cliWakePending || destroyed) return;
+      if (!cliWakePending || destroyed || sessionRestorePromptStore.restoring) return;
       cliWakePending = false;
       try {
         const args = await invoke<string[]>("get_cli_args");
@@ -233,6 +235,7 @@
     void getCurrentWindow()
       .onCloseRequested(async (event) => {
         event.preventDefault();
+        if (sessionRestorePromptStore.restoring) return;
         if (closing) return;
         closing = true;
         await Promise.all([
@@ -251,6 +254,7 @@
       });
 
     void listen<LinkGraphDocumentOpenRequest>(LINK_GRAPH_OPEN_DOCUMENT_EVENT, (event) => {
+      if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
       const currentSnapshot = {
         ...latestLinkGraphSnapshot,
         context: currentLinkGraphContext(),
@@ -320,6 +324,7 @@
 
     // ドラッグ＆ドロップ対応
     void listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+      if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
       await processPaths(event.payload.paths);
     }).then((un) => {
       if (destroyed) un();
@@ -480,7 +485,20 @@
 
   // グローバルキーボードショートカット
   $effect(() => {
+    if (!sessionRestorePromptStore.restoring && hydrated && cliWakePending) {
+      untrack(() => {
+        void scheduleCliDrain();
+      });
+    }
+  });
+
+  $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
+      if (uiStore.layoutsOpen) {
+        if (e.key === "F5" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r"))
+          e.preventDefault();
+        return;
+      }
       const target = e.target as HTMLElement;
       const reloadShortcut =
         e.key === "F5" ||
@@ -641,6 +659,7 @@
 
     keepListener(
       listen<string>("menu-action", (event) => {
+        if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
         runCommand(event.payload);
       })
     );
@@ -673,6 +692,10 @@
 
 {#if uiStore.aboutDialogOpen}
   <AboutDialog onclose={() => uiStore.closeAbout()} />
+{/if}
+
+{#if uiStore.layoutsOpen}
+  <WorkspaceLayoutsDialog onclose={() => uiStore.closeLayouts()} />
 {/if}
 
 {#if lightboxStore.open}

@@ -173,9 +173,10 @@ mod app_identity_tests {
     use std::collections::HashSet;
     use std::path::{Path, PathBuf};
 
-    const STORE_FILES: [&str; 6] = [
+    const STORE_FILES: [&str; 7] = [
         "settings.json",
         "tabs.json",
+        "layouts.json",
         "recent.json",
         "trusted-root.json",
         "local-fonts/body.slot",

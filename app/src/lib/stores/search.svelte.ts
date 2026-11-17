@@ -13,6 +13,7 @@ function createSearchStore() {
   let open = $state(false);
   let query = $state("");
   let useRegex = $state(false);
+  let scrollOnChange = $state(true);
   let matchCount = $state(0);
   let currentIndex = $state(-1); // -1 = マッチなし
   let error = $state<string | null>(null);
@@ -30,6 +31,9 @@ function createSearchStore() {
   let navVersion = $state(0);
 
   return {
+    get scrollOnChange() {
+      return scrollOnChange;
+    },
     get open() {
       return open;
     },
@@ -76,9 +80,11 @@ function createSearchStore() {
       return { open, query, useRegex };
     },
     openSearch() {
+      scrollOnChange = true;
       open = true;
     },
     closeSearch() {
+      scrollOnChange = true;
       // queryは残す（再度Ctrl+Fで開いたときに前回検索語を再利用できる）
       open = false;
       matchCount = 0;
@@ -92,6 +98,7 @@ function createSearchStore() {
       targetLine = null;
     },
     setQuery(q: string) {
+      scrollOnChange = true;
       query = q;
     },
     setTargetLine(line: number | null) {
@@ -110,12 +117,15 @@ function createSearchStore() {
       navVersion++;
     },
     toggleRegex() {
+      scrollOnChange = true;
       useRegex = !useRegex;
     },
     setRegex(value: boolean) {
+      scrollOnChange = true;
       useRegex = value;
     },
     restoreSessionState(value: unknown) {
+      scrollOnChange = false;
       const candidate =
         value && typeof value === "object" ? (value as Record<string, unknown>) : {};
       open = candidate.open === true;

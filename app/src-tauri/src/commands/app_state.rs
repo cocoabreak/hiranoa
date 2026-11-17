@@ -8,6 +8,7 @@ fn file_for_kind(kind: &str) -> Result<&'static str, String> {
         "settings" => Ok("settings.json"),
         "tabs" => Ok("tabs.json"),
         "recent" => Ok("recent.json"),
+        "layouts" => Ok("layouts.json"),
         _ => Err("未対応の状態ストアです".to_string()),
     }
 }
@@ -44,12 +45,16 @@ fn validate_state(kind: &str, value: &Value) -> Result<(), String> {
             "search",
         ],
         "recent" => &["files", "folders", "archives"],
+        "layouts" => &["schemaVersion", "layouts"],
         _ => return Err("未対応の状態ストアです".to_string()),
     };
     if object.keys().any(|key| !allowed.contains(&key.as_str())) {
         return Err("状態データに未対応のキーがあります".to_string());
     }
     let max_entries = if kind == "recent" { 10 } else { 100 };
+    if kind == "layouts" {
+        return validate_layouts(object);
+    }
     for key in ["tabs", "files", "folders", "archives"] {
         if object
             .get(key)
@@ -88,6 +93,96 @@ fn validate_state(kind: &str, value: &Value) -> Result<(), String> {
                 })
             {
                 return Err("検索状態が不正です".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_layouts(object: &Map<String, Value>) -> Result<(), String> {
+    let invalid = || "レイアウト状態が不正です".to_string();
+    if object.get("schemaVersion").and_then(Value::as_u64) != Some(1) {
+        return Err(invalid());
+    }
+    let layouts = object
+        .get("layouts")
+        .and_then(Value::as_array)
+        .ok_or_else(invalid)?;
+    if layouts.len() > 20 {
+        return Err(invalid());
+    }
+    let mut ids = std::collections::HashSet::new();
+    let mut names = std::collections::HashSet::new();
+    for layout in layouts {
+        let layout = layout.as_object().ok_or_else(invalid)?;
+        if layout
+            .keys()
+            .any(|key| !["id", "name", "session", "appearance"].contains(&key.as_str()))
+        {
+            return Err(invalid());
+        }
+        let id = layout
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        let name = layout
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(invalid)?;
+        if id.is_empty()
+            || id.encode_utf16().count() > 80
+            || !ids.insert(id)
+            || name.trim().is_empty()
+            || name != name.trim()
+            || name.encode_utf16().count() > 80
+            || name.chars().any(char::is_control)
+            || !names.insert(name)
+        {
+            return Err(invalid());
+        }
+        let session = layout.get("session").ok_or_else(invalid)?;
+        validate_state("tabs", session)?;
+        let session = session.as_object().ok_or_else(invalid)?;
+        validate_workspace(session)?;
+        if let Some(source) = session.get("explorer").filter(|v| !v.is_null()) {
+            validate_workspace_tab(&serde_json::json!({"path": "explorer", "source": source}))?;
+        }
+        let appearance = layout
+            .get("appearance")
+            .and_then(Value::as_object)
+            .ok_or_else(invalid)?;
+        if appearance.len() != 6
+            || appearance.keys().any(|key| {
+                ![
+                    "sidebarVisible",
+                    "tocVisible",
+                    "sidebarWidth",
+                    "tocWidth",
+                    "tocRatio",
+                    "contentZoom",
+                ]
+                .contains(&key.as_str())
+            })
+        {
+            return Err(invalid());
+        }
+        for key in ["sidebarVisible", "tocVisible"] {
+            if !appearance.get(key).is_some_and(Value::is_boolean) {
+                return Err(invalid());
+            }
+        }
+        for (key, min, max) in [
+            ("sidebarWidth", 160.0, 480.0),
+            ("tocWidth", 160.0, 480.0),
+            ("tocRatio", 0.2, 0.8),
+            ("contentZoom", 50.0, 200.0),
+        ] {
+            if appearance
+                .get(key)
+                .and_then(Value::as_f64)
+                .is_none_or(|v| !v.is_finite() || v < min || v > max)
+            {
+                return Err(invalid());
             }
         }
     }
@@ -231,9 +326,11 @@ pub fn load_app_state(app: AppHandle, kind: String) -> Result<Value, String> {
     let store = app
         .store(store_path_for_kind(&kind)?)
         .map_err(|e| e.to_string())?;
-    Ok(Value::Object(
-        store.entries().into_iter().collect::<Map<_, _>>(),
-    ))
+    let value = Value::Object(store.entries().into_iter().collect::<Map<_, _>>());
+    if kind == "layouts" && value.as_object().is_some_and(|v| !v.is_empty()) {
+        validate_state(&kind, &value)?;
+    }
+    Ok(value)
 }
 
 #[tauri::command]
@@ -245,11 +342,25 @@ pub fn save_app_state(app: AppHandle, kind: String, value: Value) -> Result<(), 
     let store = app
         .store(store_path_for_kind(&kind)?)
         .map_err(|e| e.to_string())?;
+    let previous = if kind == "layouts" {
+        Some(store.entries())
+    } else {
+        None
+    };
     store.clear();
     for (key, value) in values {
         store.set(key, value);
     }
-    store.save().map_err(|e| e.to_string())
+    if let Err(error) = store.save() {
+        if let Some(previous) = previous {
+            store.clear();
+            for (key, value) in previous {
+                store.set(key, value);
+            }
+        }
+        return Err(error.to_string());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -262,6 +373,7 @@ mod tests {
         assert_eq!(file_for_kind("settings"), Ok("settings.json"));
         assert_eq!(file_for_kind("tabs"), Ok("tabs.json"));
         assert_eq!(file_for_kind("recent"), Ok("recent.json"));
+        assert_eq!(file_for_kind("layouts"), Ok("layouts.json"));
         assert!(file_for_kind("trusted-root").is_err());
         assert!(file_for_kind("../trusted-root.json").is_err());
     }
@@ -292,6 +404,48 @@ mod tests {
             &json!({ "search": { "open": "yes", "query": "x", "useRegex": false } })
         )
         .is_err());
+    }
+
+    fn layout_state() -> Value {
+        json!({"schemaVersion": 1, "layouts": [{"id": "one", "name": "Review",
+            "session": {"schemaVersion": 2, "workspace": {"panes": [{"tabs": [{"path": "D:/notes/a.md", "pinned": true, "viewMode": "source"}], "activeIndex": 0}], "activePaneIndex": 0, "splitRatio": 0.5}, "explorer": null, "expandedDirs": []},
+            "appearance": {"sidebarVisible": true, "tocVisible": true, "sidebarWidth": 224, "tocWidth": 208, "tocRatio": 0.7, "contentZoom": 100}}]})
+    }
+
+    #[test]
+    fn layouts_validate_nested_workspace_and_restrict_appearance() {
+        assert!(validate_state("layouts", &layout_state()).is_ok());
+        let mut value = layout_state();
+        value["layouts"][0]["appearance"]["externalImagePolicy"] = json!("allow");
+        assert!(validate_state("layouts", &value).is_err());
+        let mut value = layout_state();
+        value["layouts"][0]["session"]["workspace"]["panes"][0]["tabs"][0]["source"] =
+            json!({"kind": "remote", "nativePath": "https://example.com"});
+        assert!(validate_state("layouts", &value).is_err());
+        let mut value = layout_state();
+        value["layouts"][0]["session"]["workspace"]["splitRatio"] = json!(2);
+        assert!(validate_state("layouts", &value).is_err());
+    }
+
+    #[test]
+    fn layouts_reject_future_schema_duplicates_and_limits() {
+        let mut value = layout_state();
+        value["schemaVersion"] = json!(2);
+        assert!(validate_state("layouts", &value).is_err());
+        let item = layout_state()["layouts"][0].clone();
+        assert!(validate_state(
+            "layouts",
+            &json!({"schemaVersion": 1, "layouts": vec![item.clone(); 21]})
+        )
+        .is_err());
+        assert!(validate_state(
+            "layouts",
+            &json!({"schemaVersion": 1, "layouts": [item.clone(), item]})
+        )
+        .is_err());
+        let mut value = layout_state();
+        value["layouts"][0]["name"] = json!("x".repeat(81));
+        assert!(validate_state("layouts", &value).is_err());
     }
 
     #[test]
