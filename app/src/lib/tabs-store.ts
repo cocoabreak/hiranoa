@@ -39,117 +39,124 @@ export async function restoreSavedTabs(): Promise<void> {
   if (sessionRestorePromptStore.restoring) return;
   sessionRestorePromptStore.beginRestore();
   try {
-    const session = await loadSession();
-    if (!session.workspace) return;
-    const sourceCache = new Map<string, DocumentSourceInfo>();
-    const restoredPanes = new Map<number, string>();
-
-    if (session.explorer) {
-      const opened =
-        session.explorer.kind === "zip"
-          ? await openArchive(session.explorer.nativePath).catch(() => false)
-          : await openFolder(session.explorer.nativePath).catch(() => false);
-      if (opened) {
-        const source = explorerStore.source;
-        if (source) {
-          sourceCache.set(`${session.explorer.kind}:${session.explorer.nativePath}`, source);
-        }
-      }
-    }
-
-    for (const [paneIndex, savedPane] of session.workspace.panes.entries()) {
-      const paneId = paneIndex === 0 ? workspaceStore.paneIds[0] : workspaceStore.addPane();
-      if (!paneId) continue;
-      const tabs = tabStore.forPane(paneId);
-      const restoredTabIds = new Map<number, string>();
-      for (const [
-        savedIndex,
-        { path, pinned, source: persistedSource, documentPath, scrollPositions, viewMode },
-      ] of savedPane.tabs.entries()) {
-        try {
-          if (!path) continue;
-          if (!persistedSource || documentPath === undefined) {
-            if (!(await authorizePath(path))) continue;
-            if (!(await openMarkdownFile(path, captureOpenTarget(paneId)))) continue;
-          } else {
-            const cacheKey = `${persistedSource.kind}:${persistedSource.nativePath}`;
-            let source = sourceCache.get(cacheKey);
-            if (!source) {
-              const accessPath =
-                persistedSource.kind === "native"
-                  ? nativeDocumentPath(
-                      {
-                        id: "restore",
-                        label: "",
-                        nativePath: persistedSource.nativePath,
-                        kind: "native",
-                        capabilities: {
-                          watch: "entries",
-                          externalEditor: true,
-                          respectGitignore: true,
-                          fullTextSearch: true,
-                          wikiLinks: true,
-                        },
-                      },
-                      { sourceId: "restore", path: documentPath }
-                    )
-                  : persistedSource.nativePath;
-              if (
-                !accessPath ||
-                !(persistedSource.kind === "zip"
-                  ? await authorizeArchivePath(accessPath)
-                  : await authorizePath(accessPath))
-              )
-                continue;
-              source =
-                persistedSource.kind === "native"
-                  ? await registerNativeSource(persistedSource.nativePath)
-                  : await registerZipSource(persistedSource.nativePath);
-              sourceCache.set(cacheKey, source);
-            }
-            if (
-              !(await openSourceMarkdown(
-                { sourceId: source.id, path: documentPath },
-                source,
-                undefined,
-                captureOpenTarget(paneId)
-              ))
-            ) {
-              continue;
-            }
-          }
-          const restored = tabs.tabs.find((tab) => tab.id === tabs.activeTabId);
-          if (restored) {
-            restoredTabIds.set(savedIndex, restored.id);
-            tabs.updateTab(restored.id, { viewMode });
-            sessionUiStateStore.restoreScrollPositions(restored.id, scrollPositions);
-            if (pinned !== !!restored.pinned) tabs.togglePin(restored.id);
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      const restoredId = restoredActiveTabId(restoredTabIds, savedPane.activeIndex ?? null);
-      if (restoredId) tabs.setActive(restoredId);
-      searchStore.forPane(paneId).restoreSessionState(savedPane.search);
-      if (tabs.tabs.length) restoredPanes.set(paneIndex, paneId);
-      else workspaceStore.removePane(paneId);
-    }
-    for (const id of [...workspaceStore.paneIds]) {
-      if (!tabStore.forPane(id).tabs.length) workspaceStore.removePane(id);
-    }
-    const activePane =
-      restoredPanes.get(session.workspace.activePaneIndex) ?? restoredPanes.values().next().value;
-    if (activePane) workspaceStore.activate(activePane);
-    workspaceStore.setRatio(session.workspace.splitRatio);
-
-    await restoreExpandedDirectories(session.expandedDirs);
+    await restoreSessionSnapshot(await loadSession());
   } catch (e) {
     console.warn("タブの復元に失敗しました:", e);
   } finally {
     sessionRestorePromptStore.endRestore();
   }
+}
+
+/** Caller owns the restore/save guard. Documents use the normal authorization path. */
+export async function restoreSessionSnapshot(session: PersistedSession): Promise<void> {
+  if (!session.workspace) return;
+  const sourceCache = new Map<string, DocumentSourceInfo>();
+  const restoredPanes = new Map<number, string>();
+  const positions: { id: string; value: unknown }[] = [];
+
+  if (session.explorer) {
+    const opened =
+      session.explorer.kind === "zip"
+        ? await openArchive(session.explorer.nativePath).catch(() => false)
+        : await openFolder(session.explorer.nativePath).catch(() => false);
+    if (opened) {
+      const source = explorerStore.source;
+      if (source) {
+        sourceCache.set(`${session.explorer.kind}:${session.explorer.nativePath}`, source);
+      }
+    }
+  }
+
+  for (const [paneIndex, savedPane] of session.workspace.panes.entries()) {
+    const paneId = paneIndex === 0 ? workspaceStore.paneIds[0] : workspaceStore.addPane();
+    if (!paneId) continue;
+    const tabs = tabStore.forPane(paneId);
+    const restoredTabIds = new Map<number, string>();
+    for (const [
+      savedIndex,
+      { path, pinned, source: persistedSource, documentPath, scrollPositions, viewMode },
+    ] of savedPane.tabs.entries()) {
+      try {
+        if (!path) continue;
+        if (!persistedSource || documentPath === undefined) {
+          if (!(await authorizePath(path))) continue;
+          if (!(await openMarkdownFile(path, captureOpenTarget(paneId)))) continue;
+        } else {
+          const cacheKey = `${persistedSource.kind}:${persistedSource.nativePath}`;
+          let source = sourceCache.get(cacheKey);
+          if (!source) {
+            const accessPath =
+              persistedSource.kind === "native"
+                ? nativeDocumentPath(
+                    {
+                      id: "restore",
+                      label: "",
+                      nativePath: persistedSource.nativePath,
+                      kind: "native",
+                      capabilities: {
+                        watch: "entries",
+                        externalEditor: true,
+                        respectGitignore: true,
+                        fullTextSearch: true,
+                        wikiLinks: true,
+                      },
+                    },
+                    { sourceId: "restore", path: documentPath }
+                  )
+                : persistedSource.nativePath;
+            if (
+              !accessPath ||
+              !(persistedSource.kind === "zip"
+                ? await authorizeArchivePath(accessPath)
+                : await authorizePath(accessPath))
+            )
+              continue;
+            source =
+              persistedSource.kind === "native"
+                ? await registerNativeSource(persistedSource.nativePath)
+                : await registerZipSource(persistedSource.nativePath);
+            sourceCache.set(cacheKey, source);
+          }
+          if (
+            !(await openSourceMarkdown(
+              { sourceId: source.id, path: documentPath },
+              source,
+              undefined,
+              captureOpenTarget(paneId)
+            ))
+          ) {
+            continue;
+          }
+        }
+        const restored = tabs.tabs.find((tab) => tab.id === tabs.activeTabId);
+        if (restored) {
+          restoredTabIds.set(savedIndex, restored.id);
+          tabs.updateTab(restored.id, { viewMode });
+          positions.push({ id: restored.id, value: scrollPositions });
+          if (pinned !== !!restored.pinned) tabs.togglePin(restored.id);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    const restoredId = restoredActiveTabId(restoredTabIds, savedPane.activeIndex ?? null);
+    if (restoredId) tabs.setActive(restoredId);
+    searchStore.forPane(paneId).restoreSessionState(savedPane.search);
+    if (tabs.tabs.length) restoredPanes.set(paneIndex, paneId);
+    else workspaceStore.removePane(paneId);
+  }
+  for (const id of [...workspaceStore.paneIds]) {
+    if (!tabStore.forPane(id).tabs.length) workspaceStore.removePane(id);
+  }
+  const activePane =
+    restoredPanes.get(session.workspace.activePaneIndex) ?? restoredPanes.values().next().value;
+  if (activePane) workspaceStore.activate(activePane);
+  workspaceStore.setRatio(session.workspace.splitRatio);
+
+  await restoreExpandedDirectories(session.expandedDirs);
+  // Restore after the final pane geometry and all asynchronous document loads settle.
+  for (const { id, value } of positions) sessionUiStateStore.restoreScrollPositions(id, value);
 }
 
 /** 保存済みタブを使わない場合に呼ぶ。tabs.jsonの内容を即座に破棄する */
@@ -206,37 +213,39 @@ export async function loadTabsOnStartup(): Promise<{ promptRestore: boolean }> {
 export async function saveTabs(): Promise<void> {
   if (sessionRestorePromptStore.restoring) return;
   try {
-    await tabsSaveQueue.enqueue({
-      schemaVersion: 2,
-      workspace: {
-        panes: workspaceStore.paneIds.map((id) => {
-          const tabs = tabStore.forPane(id);
-          return {
-            tabs: tabs.tabs.map((t) => ({
-              path: t.displayPath ?? t.path,
-              pinned: !!t.pinned,
-              source: t.source
-                ? { kind: t.source.kind, nativePath: t.source.nativePath }
-                : undefined,
-              documentPath: t.document?.path,
-              scrollPositions: sessionUiStateStore.snapshot(t.id),
-              viewMode: t.viewMode ?? "rendered",
-            })),
-            activeIndex: tabs.tabs.findIndex((t) => t.id === tabs.activeTabId),
-            search: searchStore.forPane(id).sessionState,
-          };
-        }),
-        activePaneIndex: workspaceStore.paneIds.indexOf(workspaceStore.activePaneId),
-        splitRatio: workspaceStore.splitRatio,
-      },
-      explorer: explorerStore.source
-        ? { kind: explorerStore.source.kind, nativePath: explorerStore.source.nativePath }
-        : null,
-      expandedDirs: sanitizeExpandedDirectories([...explorerStore.expandedDirs]),
-    });
+    await tabsSaveQueue.enqueue(captureSessionSnapshot());
   } catch (e) {
     console.warn("タブの保存に失敗しました:", e);
   }
+}
+
+export function captureSessionSnapshot(): PersistedSession {
+  return {
+    schemaVersion: 2,
+    workspace: {
+      panes: workspaceStore.paneIds.map((id) => {
+        const tabs = tabStore.forPane(id);
+        return {
+          tabs: tabs.tabs.map((t) => ({
+            path: t.displayPath ?? t.path,
+            pinned: !!t.pinned,
+            source: t.source ? { kind: t.source.kind, nativePath: t.source.nativePath } : undefined,
+            documentPath: t.document?.path,
+            scrollPositions: sessionUiStateStore.snapshot(t.id),
+            viewMode: t.viewMode ?? "rendered",
+          })),
+          activeIndex: tabs.tabs.findIndex((t) => t.id === tabs.activeTabId),
+          search: searchStore.forPane(id).sessionState,
+        };
+      }),
+      activePaneIndex: workspaceStore.paneIds.indexOf(workspaceStore.activePaneId),
+      splitRatio: workspaceStore.splitRatio,
+    },
+    explorer: explorerStore.source
+      ? { kind: explorerStore.source.kind, nativePath: explorerStore.source.nativePath }
+      : null,
+    expandedDirs: sanitizeExpandedDirectories([...explorerStore.expandedDirs]),
+  };
 }
 
 export async function flushTabs(): Promise<void> {

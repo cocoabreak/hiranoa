@@ -25,6 +25,20 @@ export function createWorkspaceStore() {
     hasPane(id: string) {
       return paneIds.includes(id);
     },
+    invalidateLayout() {
+      layoutVersion++;
+      for (const id of paneIds) requests.set(id, (requests.get(id) ?? 0) + 1);
+    },
+    reset() {
+      const previous = paneIds;
+      paneIds = [crypto.randomUUID()];
+      activePaneId = paneIds[0];
+      splitRatio = 0.5;
+      layoutVersion++;
+      roots.clear();
+      requests.clear();
+      for (const id of previous) for (const listener of disposeListeners) listener(id);
+    },
     activate(id: string) {
       if (paneIds.includes(id)) activePaneId = id;
     },

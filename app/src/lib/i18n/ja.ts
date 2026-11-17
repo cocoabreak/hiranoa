@@ -5,6 +5,31 @@
  * （各プラグインが自分のディレクトリ内で保持する。plugins/README.md参照）。
  */
 export const ja = {
+  layouts: {
+    title: "ワークスペースレイアウトを管理",
+    name: "レイアウト名",
+    save: "現在の構成を保存",
+    apply: "適用",
+    rename: "名前変更",
+    remove: "削除",
+    cancel: "キャンセル",
+    close: "閉じる",
+    empty: "保存したレイアウトはありません。",
+    hint: "最大20件。タブ・閲覧位置・分割・Explorer・パネル・ズームを保存します。",
+    replace:
+      "現在のタブ（ピン留めを含む）を置き換えます。読めない文書はスキップし、すべて読めない場合は空になります。続行しますか？",
+    deleteConfirm: "このレイアウトを削除しますか？",
+    busy: "適用しています…",
+    saved: "保存しました。",
+    changed: "名前を変更しました。",
+    deleted: "削除しました。",
+    error: "操作に失敗しました。名前の重複・80文字の上限・保存件数・保存容量を確認してください。",
+    loadError:
+      "保存データを読み込めません。未対応または不正な形式のため、上書きせず管理を停止しました。",
+    result: (restored: number, skipped: number) =>
+      `${restored}件を復元、${skipped}件をスキップしました。`,
+    tabCount: (count: number) => `${count}タブ`,
+  },
   split: {
     split: "左右に分割",
     unsplit: "分割を解除",

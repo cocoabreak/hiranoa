@@ -290,6 +290,63 @@ try {
     await driver.waitFor("document.querySelector('.footnote-ref') !== null");
   });
 
+  await test("名前付きレイアウトの検索復元と倍率変更で閲覧位置を維持する", async () => {
+    const layoutDocument = path.join(workDir, "fixtures", "layout-position.md");
+    writeFileSync(
+      layoutDocument,
+      Array.from(
+        { length: 200 },
+        (_, i) => `## Section ${i}\n\nlayout-position-marker paragraph ${i}\n`
+      ).join("\n")
+    );
+    await driver.evaluate("window.__e2e.resetSession()");
+    await open("openMarkdownFile", layoutDocument);
+    await driver.waitFor(
+      "document.querySelector('.markdown-body')?.textContent.includes('layout-position-marker')"
+    );
+    for (const mode of ["rendered", "source"]) {
+      await driver.evaluate(`(async () => {
+        const tabs = (await import('/src/lib/stores/tab.svelte.ts')).tabStore;
+        tabs.updateTab(tabs.activeTabId, {viewMode: ${JSON.stringify(mode)}});
+        (await import('/src/lib/stores/settings.svelte.ts')).settingsStore.setContentZoom(200);
+        const search = (await import('/src/lib/stores/search.svelte.ts')).searchStore;
+        search.setQuery('layout-position-marker'); search.openSearch();
+      })()`);
+      await driver.waitFor(
+        "document.querySelector('.search-match') !== null || document.querySelector('mark') !== null"
+      );
+      const saved = await driver.evaluate(`(async () => {
+        await new Promise(resolve => setTimeout(resolve, 350));
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        const main = document.querySelector('[role="main"]');
+        main.scrollTop = main.scrollHeight - main.clientHeight - 100;
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return main.scrollTop;
+      })()`);
+      assert.ok(saved > 1000);
+      // Complete the browser's scroll event delivery before taking the saved snapshot.
+      await driver.waitFor(
+        `Math.abs((window.__e2e.getState().scroll[${JSON.stringify(mode)}] ?? -1) - ${saved}) < 3`
+      );
+      await driver.evaluate(`(async () => {
+        const actions = await import('/src/lib/actions/layout-actions.ts');
+        const layout = actions.captureLayout('Position regression');
+        (await import('/src/lib/stores/settings.svelte.ts')).settingsStore.setContentZoom(50);
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        await actions.applyLayout(layout);
+      })()`);
+      await driver.waitFor(
+        `Math.abs(document.querySelector('[role="main"]').scrollTop - ${saved}) < 3`
+      );
+      await driver.evaluate("new Promise(resolve => setTimeout(resolve, 400))");
+      const actual = await driver.evaluate("document.querySelector('[role=main]').scrollTop");
+      assert.ok(Math.abs(actual - saved) < 3, `${mode}: saved=${saved}, actual=${actual}`);
+    }
+    await driver.evaluate(
+      `(async()=>{(await import('/src/lib/stores/search.svelte.ts')).searchStore.closeSearch();(await import('/src/lib/stores/settings.svelte.ts')).settingsStore.setContentZoom(100)})()`
+    );
+  });
+
   await test("更新通知を表示できる", async () => {
     await driver.evaluate("window.__e2e.showUpdateAvailable()");
     await driver.waitFor(

@@ -2,6 +2,31 @@ import type { ja } from "./ja";
 
 /** 英語辞書。`typeof ja` で型を縛り、キー欠落をコンパイル時に検出する */
 export const en: typeof ja = {
+  layouts: {
+    title: "Manage workspace layouts",
+    name: "Layout name",
+    save: "Save current layout",
+    apply: "Apply",
+    rename: "Rename",
+    remove: "Delete",
+    cancel: "Cancel",
+    close: "Close",
+    empty: "No saved layouts.",
+    hint: "Up to 20 layouts. Saves tabs, reading positions, split, Explorer, panels and zoom.",
+    replace:
+      "Replace the current tabs, including pinned tabs? Unreadable documents will be skipped. If none can be opened, the workspace will be empty.",
+    deleteConfirm: "Delete this layout?",
+    busy: "Applying…",
+    saved: "Layout saved.",
+    changed: "Layout renamed.",
+    deleted: "Layout deleted.",
+    error:
+      "Operation failed. Check for duplicate names, the 80-character name limit, layout count or storage limit.",
+    loadError:
+      "Cannot read saved layouts. Management is disabled to avoid overwriting unsupported or invalid data.",
+    result: (restored: number, skipped: number) => `Restored ${restored}, skipped ${skipped}.`,
+    tabCount: (count: number) => `${count} tabs`,
+  },
   split: {
     split: "Split view",
     unsplit: "Merge panes",

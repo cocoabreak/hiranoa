@@ -109,5 +109,8 @@ describe("searchStore", () => {
     expect(searchStore.matchCount).toBe(0);
     expect(searchStore.currentIndex).toBe(-1);
     expect(searchStore.results).toEqual([]);
+    expect(searchStore.scrollOnChange).toBe(false);
+    searchStore.setQuery("user input");
+    expect(searchStore.scrollOnChange).toBe(true);
   });
 });

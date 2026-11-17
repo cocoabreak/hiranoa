@@ -1,4 +1,5 @@
 import { captureOpenTarget } from "./workspace-actions";
+import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { hasPendingSource, reconcileDocumentResource } from "$lib/document-resources";
 import { invoke } from "@tauri-apps/api/core";
 import { explorerStore } from "$lib/stores/explorer.svelte";
@@ -50,6 +51,7 @@ export async function openFileDialog(): Promise<void> {
 
 /** 指定パスをエクスプローラーのルートとして開く */
 export async function openFolder(path: string): Promise<boolean> {
+  const version = workspaceStore.layoutVersion;
   if (!(await authorizeFolderPath(path))) return false;
   const previousSource = explorerStore.source;
   // ルート直下1階層のみ読み込む。サブフォルダは展開時に遅延取得する
@@ -58,6 +60,7 @@ export async function openFolder(path: string): Promise<boolean> {
     rootDocument(source),
     settingsStore.settings.respectGitignore
   );
+  if (version !== workspaceStore.layoutVersion) return false;
   explorerStore.setRoot(path, tree, source);
   await releaseArchiveSource(previousSource);
   // 表示中レベル（この時点ではルートのみ）のファイル増減監視を張り直す
@@ -72,10 +75,15 @@ export async function openFolder(path: string): Promise<boolean> {
 
 /** ZIPを読み取り専用ドキュメントソースとしてExplorerへ開く */
 export async function openArchive(path: string): Promise<boolean> {
+  const version = workspaceStore.layoutVersion;
   if (!(await authorizeArchivePath(path))) return false;
   const previousSource = explorerStore.source;
   const source = await registerZipSource(path);
   const tree = await listSourceEntries(rootDocument(source), false);
+  if (version !== workspaceStore.layoutVersion) {
+    await releaseArchiveSource(source);
+    return false;
+  }
   for (const tab of tabStore.allTabs.filter((tab) => tab.source?.id === source.id)) {
     tabStore.updateTab(tab.id, { source });
   }
@@ -91,10 +99,11 @@ export async function openArchive(path: string): Promise<boolean> {
 }
 
 export async function openArchiveDialog(): Promise<void> {
+  const version = workspaceStore.layoutVersion;
   let selectedPath = "";
   try {
     const path = await invoke<string | null>("pick_zip_file");
-    if (!path) return;
+    if (!path || version !== workspaceStore.layoutVersion) return;
     selectedPath = path;
     await openArchive(path);
   } catch (err) {
@@ -104,10 +113,11 @@ export async function openArchiveDialog(): Promise<void> {
 
 /** フォルダ選択ダイアログを開き、選択されたフォルダをエクスプローラーのルートにする */
 export async function openFolderDialog(): Promise<void> {
+  const version = workspaceStore.layoutVersion;
   let selectedPath = "";
   try {
     const path = await invoke<string | null>("pick_folder");
-    if (!path) return;
+    if (!path || version !== workspaceStore.layoutVersion) return;
     selectedPath = path;
     if (!(await openFolder(path))) return;
     // 明示的にフォルダを開いたら、前回セッションの復元プロンプトは閉じる

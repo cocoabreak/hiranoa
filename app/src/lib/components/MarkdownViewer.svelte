@@ -159,6 +159,7 @@
     mode: ScrollViewMode
   ): void {
     const generation = ++scrollRestoreGeneration;
+    suppressScrollRecording = true;
     const savedPosition = untrack(() =>
       tabId ? (sessionUiStateStore.getScroll(tabId, mode) ?? 0) : 0
     );
@@ -167,7 +168,13 @@
       if (generation !== scrollRestoreGeneration) return;
       if (contentEl) contentEl.scrollTop = savedPosition;
       requestAnimationFrame(() => {
-        if (generation === scrollRestoreGeneration) suppressScrollRecording = false;
+        if (
+          generation !== scrollRestoreGeneration ||
+          viewKeyFor(activeTab, scrollViewMode) !== viewKey
+        )
+          return;
+        suppressScrollRecording = false;
+        handleScroll();
       });
     });
   }
@@ -338,7 +345,7 @@
     // （保存は常にonscroll={handleScroll}がリアルタイムに行っている。ここで改めて
     // contentEl.scrollTopを読むと、この時点で既にDOMが新タブの内容へ差し替わった後
     // のため、旧タブの位置としてほぼ0の値を誤って上書き保存してしまっていた）
-    if (viewKey !== prevViewKey) {
+    if (shouldRestoreScroll(viewKey, prevViewKey, restoredPositionsChanged)) {
       scheduleScrollRestore(viewKey, tab?.id, scrollViewMode);
     } else {
       // ファイル更新時：スクロール位置を維持
@@ -346,9 +353,7 @@
         tab ? sessionUiStateStore.getScroll(tab.id, scrollViewMode) : undefined
       );
       if (saved !== undefined) {
-        requestAnimationFrame(() => {
-          if (contentEl) contentEl.scrollTop = saved;
-        });
+        scheduleScrollRestore(viewKey, tab?.id, scrollViewMode);
       }
     }
 
@@ -513,7 +518,8 @@
     // タブ切り替えによる再走査では、既存のスクロール位置復元と競合しないよう
     // ハイライト・件数だけ更新しビューは動かさない。
     const searchParamsChanged =
-      query !== prevSearchQuery || useRegex !== prevUseRegex || isOpen !== prevSearchOpen;
+      searchStore.scrollOnChange &&
+      (query !== prevSearchQuery || useRegex !== prevUseRegex || isOpen !== prevSearchOpen);
     prevSearchQuery = query;
     prevUseRegex = useRegex;
     prevSearchOpen = isOpen;
@@ -580,7 +586,7 @@
   // next()/prev()の呼び出しでのみ増分するnavVersionを使う
   $effect(() => {
     void searchStore.navVersion;
-    markCurrentMatch(true);
+    untrack(() => markCurrentMatch(true));
   });
 
   // 結果一覧のクリックは検索条件を変えず、指定行に最も近い既存markへ移動する。
