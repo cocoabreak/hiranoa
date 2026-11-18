@@ -1,6 +1,10 @@
 fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(
         tauri_build::AppManifest::new().commands(&[
+            "open_git_history",
+            "read_git_snapshot",
+            "read_git_image",
+            "close_git_history",
             "read_file",
             "save_text_export",
             "save_binary_export",

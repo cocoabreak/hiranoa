@@ -6,6 +6,10 @@
     "main"
   ],
   "permissions": [
+    "allow-open-git-history",
+    "allow-read-git-snapshot",
+    "allow-read-git-image",
+    "allow-close-git-history",
     "core:default",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",

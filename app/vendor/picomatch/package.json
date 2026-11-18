@@ -1,0 +1,20 @@
+{
+  "name": "@hiranoa/picomatch",
+  "version": "4.0.7-patch.1",
+  "private": true,
+  "description": "picomatch 4.0.7 with conservative repeated-extglob protection for GHSA-fc5q-39xc-vjpf",
+  "type": "commonjs",
+  "main": "index.js",
+  "sideEffects": false,
+  "license": "MIT",
+  "engines": { "node": ">=12" },
+  "hiranoaPatch": {
+    "upstream": "https://registry.npmjs.org/picomatch/-/picomatch-4.0.7.tgz",
+    "integrity": "sha512-qcJu88Q2IWqJsDD529JKMdwGm/dvInW4HvQnRwiH9JtihJvzGOscDtHE3x1pBKeUOTysQ8kVmLnJ2kJu7yhcGA==",
+    "advisory": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+    "change": "Classify unbounded repeated-extglob bodies as risky, including single branches, explicit recursion opt-outs and escaped regex syntax emitted by unescape=true. Reuse upstream literal fallback and safe character-class flattening.",
+    "compatibility": "Complex repetitions containing wildcards, regex quantifiers, escaped classes, nested groups or braces become literal patterns unless the existing safe character flattening applies. Repeated alternatives must be distinct, equal-length plain literals; insensitive alternatives are restricted to ASCII. Ordinary globs and supported fixed-width repetitions are preserved.",
+    "scope": "Mitigates repeated-extglob ambiguity in GHSA-fc5q-39xc-vjpf. Upstream native-regex compatibility syntax such as (a+)+ is unchanged and is not safe for arbitrary untrusted patterns. Hiranoa uses these development tools with project-controlled patterns, not Markdown input.",
+    "removal": "Replace with an official patched release after the regression suite passes."
+  }
+}

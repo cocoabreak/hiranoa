@@ -23,6 +23,17 @@ async function getMermaid() {
       startOnLoad: false,
       theme: "default",
       securityLevel: "strict",
+      secure: [
+        "secure",
+        "securityLevel",
+        "startOnLoad",
+        "maxTextSize",
+        "maxEdges",
+        "suppressErrorRendering",
+        "themeCSS",
+        "themeVariables",
+        "fontFamily",
+      ],
       // 構文エラー時はアプリ側でエラーUIを表示する。Mermaid既定のエラーSVGは
       // document.body直下の一時要素に描画され、例外経路で残ることがあるため抑止する。
       suppressErrorRendering: true,
@@ -43,7 +54,8 @@ async function renderOne(
   externalImagesAllowed = false,
   onExternalImagesBlocked?: (count: number) => void,
   isCurrent: () => boolean = () => true,
-  viewRoot?: HTMLElement
+  viewRoot?: HTMLElement,
+  blockLocalResources = false
 ): Promise<void> {
   if (!isCurrent()) return;
   if (!el.classList.contains("mermaid-pending")) return;
@@ -55,6 +67,10 @@ async function renderOne(
 
   let renderId: string | undefined;
   try {
+    if (blockLocalResources) {
+      const { assertHistoryDiagramResources } = await import("./history-resources");
+      assertHistoryDiagramResources(code);
+    }
     const mermaid = await getMermaid();
     if (!isCurrent()) return;
     renderId = `mermaid-${crypto.randomUUID()}`;
@@ -76,7 +92,7 @@ async function renderOne(
     if (!isCurrent()) return;
     const protectedResult = externalImagesAllowed
       ? { html: svg, blockedCount: 0 }
-      : protectExternalImages(svg);
+      : protectExternalImages(svg, blockLocalResources);
     const scope = viewRoot?.dataset.viewScope;
     const svgTools = scope ? await import("$lib/markdown/view-svg") : null;
     if (!isCurrent()) return;
@@ -120,7 +136,8 @@ export async function renderAllPending(
   container: HTMLElement,
   locale: Locale,
   externalImagesAllowed = false,
-  onExternalImagesBlocked?: (count: number) => void
+  onExternalImagesBlocked?: (count: number) => void,
+  blockLocalResources = false
 ): Promise<void> {
   const pending = [...container.querySelectorAll<HTMLElement>(".mermaid-pending")];
   const jobs = pending.slice(0, MAX_PRINT_DIAGRAMS);
@@ -135,7 +152,8 @@ export async function renderAllPending(
         externalImagesAllowed,
         onExternalImagesBlocked,
         () => container.contains(element),
-        container
+        container,
+        blockLocalResources
       );
     }
   }
@@ -159,7 +177,8 @@ export function setupLazyMermaid(
   container: HTMLElement,
   locale: Locale,
   externalImagesAllowed = false,
-  onExternalImagesBlocked?: (count: number) => void
+  onExternalImagesBlocked?: (count: number) => void,
+  blockLocalResources = false
 ): () => void {
   const pending = container.querySelectorAll<HTMLElement>(".mermaid-pending");
   if (pending.length === 0) return () => {};
@@ -180,7 +199,8 @@ export function setupLazyMermaid(
               externalImagesAllowed,
               onExternalImagesBlocked,
               () => !disposed && container.contains(entry.target),
-              container
+              container,
+              blockLocalResources
             );
           }, 0);
           timers.add(timer);

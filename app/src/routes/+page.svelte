@@ -196,10 +196,12 @@
    */
   function scheduleCliDrain(): Promise<void> {
     cliWakePending = true;
-    if (!cliProcessingReady || sessionRestorePromptStore.restoring) return cliDrainChain;
+    if (!cliProcessingReady || sessionRestorePromptStore.restoring || uiStore.gitHistory)
+      return cliDrainChain;
 
     cliDrainChain = cliDrainChain.then(async () => {
-      if (!cliWakePending || destroyed || sessionRestorePromptStore.restoring) return;
+      if (!cliWakePending || destroyed || sessionRestorePromptStore.restoring || uiStore.gitHistory)
+        return;
       cliWakePending = false;
       try {
         const args = await invoke<string[]>("get_cli_args");
@@ -254,7 +256,7 @@
       });
 
     void listen<LinkGraphDocumentOpenRequest>(LINK_GRAPH_OPEN_DOCUMENT_EVENT, (event) => {
-      if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
+      if (uiStore.layoutsOpen || uiStore.gitHistory || sessionRestorePromptStore.restoring) return;
       const currentSnapshot = {
         ...latestLinkGraphSnapshot,
         context: currentLinkGraphContext(),
@@ -324,7 +326,7 @@
 
     // ドラッグ＆ドロップ対応
     void listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
-      if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
+      if (uiStore.layoutsOpen || uiStore.gitHistory || sessionRestorePromptStore.restoring) return;
       await processPaths(event.payload.paths);
     }).then((un) => {
       if (destroyed) un();
@@ -485,7 +487,7 @@
 
   // グローバルキーボードショートカット
   $effect(() => {
-    if (!sessionRestorePromptStore.restoring && hydrated && cliWakePending) {
+    if (!sessionRestorePromptStore.restoring && !uiStore.gitHistory && hydrated && cliWakePending) {
       untrack(() => {
         void scheduleCliDrain();
       });
@@ -494,7 +496,8 @@
 
   $effect(() => {
     function handleKeydown(e: KeyboardEvent) {
-      if (uiStore.layoutsOpen) {
+      if (uiStore.layoutsOpen || uiStore.gitHistory) {
+        if (uiStore.gitHistory && keymap[comboFromEvent(e) ?? ""]) e.preventDefault();
         if (e.key === "F5" || ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r"))
           e.preventDefault();
         return;
@@ -659,7 +662,8 @@
 
     keepListener(
       listen<string>("menu-action", (event) => {
-        if (uiStore.layoutsOpen || sessionRestorePromptStore.restoring) return;
+        if (uiStore.layoutsOpen || uiStore.gitHistory || sessionRestorePromptStore.restoring)
+          return;
         runCommand(event.payload);
       })
     );
@@ -696,6 +700,16 @@
 
 {#if uiStore.layoutsOpen}
   <WorkspaceLayoutsDialog onclose={() => uiStore.closeLayouts()} />
+{/if}
+
+{#if uiStore.gitHistory}
+  {#await import("$lib/components/GitHistoryView.svelte") then module}
+    <module.default
+      document={uiStore.gitHistory.document}
+      title={uiStore.gitHistory.title}
+      onclose={() => uiStore.closeGitHistory()}
+    />
+  {/await}
 {/if}
 
 {#if lightboxStore.open}

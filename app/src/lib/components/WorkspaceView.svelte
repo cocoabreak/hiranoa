@@ -4,6 +4,7 @@
   import { onMount } from "svelte";
   import { workspaceStore } from "$lib/stores/workspace.svelte";
   import { tabStore } from "$lib/stores/tab.svelte";
+  import { uiStore } from "$lib/stores/ui.svelte";
   import { splitView, unsplitView, moveTabToOther } from "$lib/actions/workspace-actions";
   import { i18n } from "$lib/i18n/index.svelte";
   import TabBar from "./TabBar.svelte";
@@ -54,6 +55,9 @@
   {/if}
   <div class="print-expand flex min-h-0 flex-1">
     {#each workspaceStore.paneIds as paneId, index (paneId)}
+      {@const active = tabStore
+        .forPane(paneId)
+        .tabs.find((tab) => tab.id === tabStore.forPane(paneId).activeTabId)}
       <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
       <section
         data-pane-id={paneId}
@@ -71,6 +75,15 @@
         <div class="flex min-w-0 border-b print:hidden">
           <div class="min-w-0 flex-1"><TabBar {paneId} /></div>
           <div class="flex shrink-0 items-center gap-0.5 px-1">
+            {#if active?.source?.kind === "native" && active.document}
+              <button
+                type="button"
+                class="rounded px-2 py-1 text-xs hover:bg-muted"
+                title={i18n.m.gitHistory.open}
+                onclick={() => uiStore.openGitHistory(active.document!, active.title)}
+                >{i18n.m.gitHistory.history}</button
+              >
+            {/if}
             {#if split}
               <button
                 title={moveOtherPaneLabel(paneId)}

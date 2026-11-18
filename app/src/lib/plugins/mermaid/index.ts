@@ -27,7 +27,8 @@ const mermaidPlugin: ViewerPlugin = {
       container,
       context.locale,
       context.externalImagesAllowed,
-      context.onExternalImagesBlocked
+      context.onExternalImagesBlocked,
+      context.blockLocalResources
     );
   },
 
@@ -36,7 +37,8 @@ const mermaidPlugin: ViewerPlugin = {
       container,
       context.locale,
       context.externalImagesAllowed,
-      context.onExternalImagesBlocked
+      context.onExternalImagesBlocked,
+      context.blockLocalResources
     );
   },
 };
