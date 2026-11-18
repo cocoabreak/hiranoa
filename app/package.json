@@ -25,6 +25,7 @@
     "tauri": "tauri",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:picomatch": "node --test scripts/picomatch-security.test.mjs",
     "perf:test": "node --test perf/*.test.mjs",
     "perf:build-app": "node perf/build-app.mjs",
     "perf:verify-app": "node perf/measure.mjs",
@@ -34,6 +35,7 @@
     "perf:report": "node perf/report.mjs",
     "perf:ci": "node perf/ci.mjs",
     "e2e:smoke": "node e2e/smoke.mjs",
+    "e2e:history": "node e2e/history-smoke.mjs",
     "e2e:check-production": "node scripts/check-e2e-production.mjs"
   },
   "license": "MIT",
@@ -65,7 +67,8 @@
     "@typescript-eslint/typescript-estree": {
       "minimatch": "^11.0.8"
     },
-    "deepmerge": "$deepmerge"
+    "deepmerge": "$deepmerge",
+    "picomatch": "$picomatch"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -85,6 +88,7 @@
     "@typescript-eslint/parser": "^8.72.2",
     "@vitest/coverage-v8": "^5.1.0",
     "deepmerge": "file:vendor/deepmerge",
+    "picomatch": "file:vendor/picomatch",
     "eslint": "^10.15.0",
     "eslint-plugin-svelte": "^3.20.0",
     "globals": "^17.14.0",

@@ -1,0 +1,244 @@
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-weight: 600;
+  line-height: 1.25;
+  margin-top: 1.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.markdown-body h1 {
+  font-size: 2em;
+  border-bottom: 1px solid hsl(var(--border));
+  padding-bottom: 0.3em;
+}
+.markdown-body h2 {
+  font-size: 1.5em;
+  border-bottom: 1px solid hsl(var(--border));
+  padding-bottom: 0.3em;
+}
+.markdown-body h3 {
+  font-size: 1.25em;
+}
+.markdown-body h4 {
+  font-size: 1em;
+}
+
+.markdown-body p {
+  margin-bottom: 1rem;
+  line-height: 1.75;
+}
+
+.markdown-body img {
+  display: inline;
+}
+
+.markdown-body a {
+  color: hsl(221, 83%, 53%);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.markdown-body a:hover {
+  opacity: 0.8;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+.markdown-body ul {
+  list-style-type: disc;
+}
+.markdown-body ol {
+  list-style-type: decimal;
+}
+.markdown-body ul ul {
+  list-style-type: circle;
+}
+.markdown-body ul ul ul {
+  list-style-type: square;
+}
+.markdown-body li {
+  margin-bottom: 0.25rem;
+  line-height: 1.75;
+}
+
+.markdown-body blockquote {
+  border-left: 4px solid hsl(var(--border));
+  padding-left: 1rem;
+  margin: 1rem 0;
+  color: hsl(var(--muted-foreground));
+}
+
+.markdown-body code:not(pre code) {
+  background-color: hsl(var(--muted));
+  border-radius: 3px;
+  font-size: 0.875em;
+  padding: 0.2em 0.4em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.markdown-body .shiki {
+  padding: 1rem;
+  border-radius: 6px;
+  margin-bottom: 1rem;
+  font-size: 0.875em;
+  line-height: 1.6;
+  overflow-x: auto;
+}
+
+.markdown-body pre.line-numbers {
+  counter-reset: step;
+  counter-increment: step 0;
+}
+
+.markdown-body pre.line-numbers .line::before {
+  content: counter(step);
+  counter-increment: step;
+  width: 1.5rem;
+  display: inline-block;
+  text-align: right;
+  margin-right: 1rem;
+  color: rgba(115, 138, 148, 0.4);
+  user-select: none;
+}
+
+.markdown-body .code-block-wrapper {
+  position: relative;
+}
+.markdown-body .code-copy-button {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  color: #d4d4d4;
+  background: rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  transition: opacity 0.15s;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.markdown-body .code-block-wrapper:hover .code-copy-button {
+  opacity: 1;
+}
+.markdown-body .code-copy-button:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+.markdown-body .code-copy-button.code-copy-success {
+  color: #4ade80;
+  opacity: 1;
+}
+.markdown-body .code-copy-icon svg {
+  display: block;
+}
+.markdown-body .code-copy-message {
+  font-size: 0.75rem;
+  line-height: 1;
+}
+
+.markdown-body table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.875em;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid hsl(var(--border));
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+.markdown-body th {
+  background-color: hsl(var(--muted));
+  font-weight: 600;
+}
+.markdown-body tr:nth-child(even) td {
+  background-color: hsl(var(--muted) / 0.4);
+}
+
+.markdown-body hr {
+  border: none;
+  border-top: 1px solid hsl(var(--border));
+  margin: 1.5rem 0;
+}
+
+.markdown-body .task-list-item {
+  list-style: none;
+  margin-left: -1.5rem;
+}
+.markdown-body .task-list-item input {
+  margin-right: 0.5rem;
+}
+
+.markdown-body dl {
+  margin-bottom: 1rem;
+}
+.markdown-body dt {
+  font-weight: 600;
+}
+.markdown-body dd {
+  margin: 0.25rem 0 0.75rem 1.5rem;
+}
+
+.markdown-body .footnotes {
+  color: hsl(var(--muted-foreground));
+  font-size: 0.875em;
+}
+.markdown-body .footnotes-list {
+  margin-bottom: 0;
+}
+.markdown-body .footnote-ref,
+.markdown-body .footnote-backref {
+  white-space: nowrap;
+}
+
+.markdown-body .mermaid-rendered {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin: 1rem 0;
+}
+.markdown-body .mermaid-rendered svg {
+  max-width: 100%;
+}
+.markdown-body .mermaid-rendered .nodeLabel p {
+  line-height: 1.5;
+}
+
+.markdown-body .lightbox-trigger-wrapper {
+  position: relative;
+  display: inline-block;
+}
+.markdown-body .lightbox-trigger-button {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 0.25rem;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  transition: opacity 0.15s;
+  cursor: pointer;
+}
+.markdown-body .lightbox-trigger-wrapper:hover .lightbox-trigger-button,
+.markdown-body .mermaid-rendered:hover .lightbox-trigger-button {
+  opacity: 1;
+}
+
+.markdown-body mark.search-match {
+  background-color: hsl(48, 96%, 68%);
+  color: inherit;
+  border-radius: 2px;
+}
+.markdown-body mark.search-match-current {
+  background-color: hsl(24, 94%, 58%);
+}

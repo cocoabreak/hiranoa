@@ -41,6 +41,15 @@ describe("Mermaid post renderer", () => {
     expect(initializeMock).toHaveBeenCalledWith(
       expect.objectContaining({ securityLevel: "strict", suppressErrorRendering: true })
     );
+    expect(initializeMock.mock.calls[0][0].secure).toEqual(
+      expect.arrayContaining([
+        "secure",
+        "securityLevel",
+        "themeCSS",
+        "themeVariables",
+        "fontFamily",
+      ])
+    );
     expect(document.getElementById(`d${renderId}`)).not.toBeInTheDocument();
     expect(diagram).toHaveClass("mermaid-rendered");
     expect(diagram.querySelector("svg")).toHaveAttribute("id", renderId);
@@ -70,6 +79,18 @@ describe("Mermaid post renderer", () => {
     expect(diagram).toHaveClass("mermaid-error-container");
     expect(diagram).toHaveTextContent("Mermaid レンダリング失敗");
     expect(diagram.querySelector("pre")).toHaveTextContent("flowchart TD");
+  });
+  it("履歴のCSS資源指定を一時DOM生成前に拒否する", async () => {
+    const container = document.createElement("main");
+    const diagram = document.createElement("div");
+    diagram.className = "mermaid-pending";
+    diagram.dataset.code = encodeURIComponent(
+      '%%{init: {"themeCSS":".node {fill:url(https://example.invalid/probe)}"}}%%\nflowchart TD\nA[probe]'
+    );
+    container.append(diagram);
+    await renderAllPending(container, "en", false, undefined, true);
+    expect(renderMock).not.toHaveBeenCalled();
+    expect(diagram).toHaveClass("mermaid-error-container");
   });
 
   it("位置復元等で購読を作り直しても処理中の図を再試行し、旧結果で上書きしない", async () => {

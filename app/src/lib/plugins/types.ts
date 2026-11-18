@@ -28,6 +28,8 @@ export interface PostRenderContext {
   locale: Locale;
   /** 遅延生成される外部画像を読み込んでよいか */
   externalImagesAllowed?: boolean;
+  /** Snapshot previews cannot load relative resources from the current working tree. */
+  blockLocalResources?: boolean;
   /** 遅延生成された外部画像をブロックした件数の通知先 */
   onExternalImagesBlocked?: (count: number) => void;
 }

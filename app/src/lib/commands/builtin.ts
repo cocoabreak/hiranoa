@@ -34,6 +34,16 @@ function activeReferenceTarget(): ReferenceTarget | null {
 }
 
 registerCommand({
+  id: "history.compare",
+  label: () => (activeReferenceTarget()?.source.kind === "native" ? i18n.m.gitHistory.open : null),
+  run: () => {
+    const target = activeReferenceTarget();
+    if (target?.source.kind === "native" && !sessionRestorePromptStore.restoring)
+      uiStore.openGitHistory(target.document, target.title);
+  },
+});
+
+registerCommand({
   id: "workspace.layouts",
   label: () => i18n.m.layouts.title,
   run: () => {

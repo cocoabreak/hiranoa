@@ -78,6 +78,7 @@ export default [
       "e2e/artifacts/**",
       "src-tauri/**",
       "vendor/deepmerge/**",
+      "vendor/picomatch/**",
     ],
   },
 ];

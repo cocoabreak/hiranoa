@@ -459,6 +459,17 @@ struct SourceRecord {
 pub struct SourceRegistry(Arc<Mutex<RegistryInner>>);
 
 impl SourceRegistry {
+    pub(crate) fn history_document_path(
+        &self,
+        document: &DocumentRef,
+        roots: &AllowedRoots,
+    ) -> Result<PathBuf, String> {
+        let backend = self.get(&document.source_id)?;
+        match backend.as_ref() {
+            SourceBackend::Native(source) => resolve_native_path(source, &document.path, roots),
+            SourceBackend::Zip(_) => Err("Git history requires a native document".to_string()),
+        }
+    }
     pub fn new() -> Self {
         Self::default()
     }

@@ -54,6 +54,10 @@ jobs:
         working-directory: app
         run: npx vitest run src/lib/markdown/sanitize.test.ts src/lib/actions/security.test.ts
 
+      - name: Patched picomatch behavior and ReDoS regression
+        working-directory: app
+        run: npm run test:picomatch
+
   lint-frontend:
     name: Lint frontend (Prettier / ESLint / svelte-check)
     runs-on: ubuntu-latest

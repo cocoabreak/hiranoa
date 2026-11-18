@@ -2,6 +2,10 @@ import type { ja } from "./ja";
 
 /** 英語辞書。`typeof ja` で型を縛り、キー欠落をコンパイル時に検出する */
 export const en: typeof ja = {
+  gitHistory: {
+    open: "View Git history and diff",
+    history: "History",
+  },
   layouts: {
     title: "Manage workspace layouts",
     name: "Layout name",

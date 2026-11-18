@@ -5,6 +5,10 @@
  * （各プラグインが自分のディレクトリ内で保持する。plugins/README.md参照）。
  */
 export const ja = {
+  gitHistory: {
+    open: "Git履歴と差分を確認",
+    history: "履歴",
+  },
   layouts: {
     title: "ワークスペースレイアウトを管理",
     name: "レイアウト名",

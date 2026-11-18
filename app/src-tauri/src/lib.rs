@@ -82,6 +82,7 @@ pub fn run() {
         .manage(LaunchState::new())
         .manage(SearchState::new())
         .manage(SourceRegistry::new())
+        .manage(commands::git_history::GitHistoryState::default())
         .manage(LinkIndexState::new())
         .manage(commands::window::LinkGraphWindowState::default())
         .manage(UpdateCheckerState::default())
@@ -92,6 +93,10 @@ pub fn run() {
         .manage(ExternalEditorState::new())
         .manage(LocalFontState::new())
         .invoke_handler(tauri::generate_handler![
+            commands::git_history::open_git_history,
+            commands::git_history::read_git_snapshot,
+            commands::git_history::read_git_image,
+            commands::git_history::close_git_history,
             commands::file::readers::read_file,
             commands::export::save_text_export,
             commands::export::save_binary_export,

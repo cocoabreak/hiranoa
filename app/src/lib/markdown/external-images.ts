@@ -29,15 +29,23 @@ function containsCssResource(value: string | null): boolean {
  * DOMへ挿入してから除去するとWebViewが先に通信を始める可能性があるため、
  * 必ずsanitize済みHTML文字列に対して呼び出す。
  */
-export function protectExternalImages(html: string): ExternalImageProtectionResult {
+export function protectExternalImages(
+  html: string,
+  blockLocalResources = false
+): ExternalImageProtectionResult {
   const template = document.createElement("template");
   template.innerHTML = html;
   const blockedElements = new Set<Element>();
+  const blockedUrl = (value: string | null) =>
+    isExternalUrl(value) ||
+    (blockLocalResources &&
+      !!value &&
+      !/^(?:data:|#)/i.test(removeAsciiWhitespaceAndControls(value)));
 
   const protectAttribute = (
     selector: string,
     attribute: string,
-    external: (value: string | null) => boolean = isExternalUrl
+    external: (value: string | null) => boolean = blockedUrl
   ) => {
     for (const element of template.content.querySelectorAll(selector)) {
       const value = element.getAttribute(attribute);
@@ -51,8 +59,16 @@ export function protectExternalImages(html: string): ExternalImageProtectionResu
   protectAttribute("img[src]", "src");
   protectAttribute('input[type="image"][src]', "src");
   protectAttribute("video[poster]", "poster");
-  protectAttribute("img[srcset]", "srcset", containsExternalUrl);
-  protectAttribute("source[srcset]", "srcset", containsExternalUrl);
+  protectAttribute(
+    "img[srcset]",
+    "srcset",
+    (value) => containsExternalUrl(value) || (blockLocalResources && !!value)
+  );
+  protectAttribute(
+    "source[srcset]",
+    "srcset",
+    (value) => containsExternalUrl(value) || (blockLocalResources && !!value)
+  );
   protectAttribute("svg image[href]", "href");
   protectAttribute("svg image[xlink\\:href]", "xlink:href");
   protectAttribute("svg feImage[href]", "href");
