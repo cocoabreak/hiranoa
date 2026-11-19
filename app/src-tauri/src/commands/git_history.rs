@@ -1,5 +1,6 @@
+use super::file::readers::native_image_mime_type;
 use super::file::{
-    mime_from_extension, trusted_paths::open_allowed_file, AllowedRoots, NativeDialogState,
+    image_mime_type, trusted_paths::open_allowed_file, AllowedRoots, NativeDialogState,
 };
 use super::sources::{DocumentRef, SourceRegistry};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -377,7 +378,7 @@ impl HistorySession {
         Ok(Some(repo.find_blob(oid).map_err(err)?.content().to_vec()))
     }
 }
-fn image_path(document: &Path, target: &str) -> Result<PathBuf, String> {
+fn image_path(document: &Path, target: &str) -> Result<(PathBuf, &'static str), String> {
     if target.len() > 4096
         || target.contains(['\0', ':', '?', '#', '\\'])
         || target.starts_with('/')
@@ -403,10 +404,8 @@ fn image_path(document: &Path, target: &str) -> Result<PathBuf, String> {
         }
     }
     let path: PathBuf = parts.into_iter().collect();
-    if mime_from_extension(&path) == "application/octet-stream" {
-        return Err("Unsupported image format".into());
-    }
-    Ok(path)
+    let mime = image_mime_type(&path).ok_or("Unsupported image format")?;
+    Ok((path, mime))
 }
 
 fn isolated_test_approval(file: &Path) -> bool {
@@ -539,7 +538,7 @@ pub fn read_git_image(
         .filter(|s| s.id == session_id)
         .ok_or("History session closed")?;
     let repo = session.repository(&roots)?;
-    let path = image_path(&session.relative, &target)?;
+    let (path, mime) = image_path(&session.relative, &target)?;
     let key = format!("{revision}:{}", path.to_string_lossy());
     if let Some((value, _)) = session.assets.get(&key) {
         return Ok(value.clone());
@@ -549,9 +548,7 @@ pub fn read_git_image(
     }
     let bytes = if revision == "working" {
         let actual = roots.resolve(&session.root.join(&path).to_string_lossy())?;
-        if !actual.starts_with(&session.root)
-            || mime_from_extension(&actual) != mime_from_extension(&path)
-        {
+        if !actual.starts_with(&session.root) || native_image_mime_type(&actual) != Some(mime) {
             return Err("Image outside repository".into());
         }
         read_allowed(&roots, &actual, MAX_IMAGE)?
@@ -564,11 +561,7 @@ pub fn read_git_image(
         return Err("Image budget exceeded".into());
     }
     session.asset_bytes += bytes.len();
-    let data = format!(
-        "data:{};base64,{}",
-        mime_from_extension(&path),
-        STANDARD.encode(&bytes)
-    );
+    let data = format!("data:{mime};base64,{}", STANDARD.encode(&bytes));
     session.assets.insert(key, (data.clone(), bytes.len()));
     Ok(data)
 }
@@ -648,7 +641,7 @@ mod tests {
                 .unwrap(),
             b"# Guide\n\nold text\n"
         );
-        let image = image_path(&session.relative, "../images/example.png").unwrap();
+        let (image, _) = image_path(&session.relative, "../images/example.png").unwrap();
         assert_eq!(
             session
                 .blob(&repo, &old.to_string(), &image, MAX_IMAGE)

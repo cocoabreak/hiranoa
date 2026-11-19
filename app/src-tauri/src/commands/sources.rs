@@ -1,7 +1,10 @@
+use crate::commands::file::readers::{
+    native_image_mime_type, read_opened_image, UNSUPPORTED_IMAGE_FORMAT,
+};
 use crate::commands::file::safe_outline::{extract_safe_outline, SafeOutlineHeading};
 use crate::commands::file::{
-    build_markdown_content, mime_from_extension, normalize_path_for_frontend,
-    read_dir_single_level, AllowedRoots, MarkdownFileContent, MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
+    build_markdown_content, image_mime_type, normalize_path_for_frontend, read_dir_single_level,
+    AllowedRoots, MarkdownFileContent, MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ignore::WalkBuilder;
@@ -729,18 +732,6 @@ fn is_markdown_virtual_path(path: &str) -> bool {
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(crate::commands::is_markdown_extension)
-}
-
-fn is_supported_image_virtual_path(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            matches!(
-                extension.to_ascii_lowercase().as_str(),
-                "png" | "jpg" | "jpeg" | "gif" | "svg" | "webp" | "bmp" | "ico"
-            )
-        })
 }
 
 fn read_u16(bytes: &[u8], offset: usize) -> Result<u16, String> {
@@ -1700,37 +1691,20 @@ pub fn read_source_image(
     match backend.as_ref() {
         SourceBackend::Native(source) => {
             let path = resolve_native_path(source, &document.path, &roots)?;
-            let (file, canonical) = crate::commands::file::trusted_paths::open_allowed_file(
+            let (file, final_path) = crate::commands::file::trusted_paths::open_allowed_file(
                 &roots,
                 &path.to_string_lossy(),
             )?;
-            if file.metadata().map_err(|error| error.to_string())?.len() > MAX_IMAGE_BYTES {
-                return Err("画像ファイルは20MiB以下にしてください".to_string());
+            if !is_path_within_native_source(source, &final_path) {
+                return Err("ソースのルート外へ移動できません".to_string());
             }
-            let mut bytes = Vec::new();
-            file.take(MAX_IMAGE_BYTES + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|error| format!("画像読み込みエラー: {error}"))?;
-            if bytes.len() as u64 > MAX_IMAGE_BYTES {
-                return Err("画像ファイルは20MiB以下にしてください".to_string());
-            }
-            Ok(format!(
-                "data:{};base64,{}",
-                mime_from_extension(&canonical),
-                STANDARD.encode(bytes)
-            ))
+            read_opened_image(file, &final_path)
         }
         SourceBackend::Zip(source) => {
             let path = normalize_virtual_path(&document.path)?;
-            if !is_supported_image_virtual_path(&path) {
-                return Err("対応していない画像形式です".to_string());
-            }
+            let mime = image_mime_type(Path::new(&path)).ok_or(UNSUPPORTED_IMAGE_FORMAT)?;
             let bytes = read_zip_entry(source, &path, MAX_IMAGE_BYTES, &roots)?;
-            Ok(format!(
-                "data:{};base64,{}",
-                mime_from_extension(Path::new(&path)),
-                STANDARD.encode(bytes)
-            ))
+            Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
         }
     }
 }
@@ -2275,9 +2249,6 @@ fn validate_image_reference(
         Ok(path) => path,
         Err(status) => return Some(status),
     };
-    if !is_supported_image_virtual_path(&path) {
-        return Some(ReferenceProblemStatus::Unverifiable);
-    }
     match backend {
         SourceBackend::Native(source) => {
             let candidate = source.root.join(&path);
@@ -2288,32 +2259,44 @@ fn validate_image_reference(
                 Err(_) => return Some(ReferenceProblemStatus::Unverifiable),
                 Ok(_) => {}
             }
-            match std::fs::canonicalize(&candidate) {
+            let canonical = match std::fs::canonicalize(&candidate) {
                 Ok(canonical) if !canonical.starts_with(&source.root) => {
                     return Some(ReferenceProblemStatus::OutsideSource);
                 }
                 Err(_) => return Some(ReferenceProblemStatus::Unverifiable),
-                _ => {}
+                Ok(canonical) => canonical,
+            };
+            if native_image_mime_type(&canonical).is_none()
+                || !std::fs::metadata(&canonical).is_ok_and(|metadata| metadata.is_file())
+            {
+                return Some(ReferenceProblemStatus::Unverifiable);
             }
             match crate::commands::file::trusted_paths::open_allowed_file(
                 roots,
-                &candidate.to_string_lossy(),
+                &canonical.to_string_lossy(),
             ) {
-                Ok((file, canonical))
-                    if is_path_within_native_source(source, &canonical)
+                Ok((file, final_path))
+                    if is_path_within_native_source(source, &final_path)
                         && file.metadata().is_ok_and(|metadata| metadata.is_file()) =>
                 {
-                    None
+                    native_image_mime_type(&final_path)
+                        .is_none()
+                        .then_some(ReferenceProblemStatus::Unverifiable)
                 }
                 Ok(_) => Some(ReferenceProblemStatus::OutsideSource),
                 _ => Some(ReferenceProblemStatus::Unverifiable),
             }
         }
-        SourceBackend::Zip(source) => match source.entries.get(&path) {
-            Some(entry) if entry.kind == ZipEntryKind::File => None,
-            Some(_) => Some(ReferenceProblemStatus::Unverifiable),
-            None => Some(ReferenceProblemStatus::Missing),
-        },
+        SourceBackend::Zip(source) => {
+            if image_mime_type(Path::new(&path)).is_none() {
+                return Some(ReferenceProblemStatus::Unverifiable);
+            }
+            match source.entries.get(&path) {
+                Some(entry) if entry.kind == ZipEntryKind::File => None,
+                Some(_) => Some(ReferenceProblemStatus::Unverifiable),
+                None => Some(ReferenceProblemStatus::Missing),
+            }
+        }
     }
 }
 
@@ -4592,6 +4575,44 @@ mod tests {
                 .iter()
                 .any(|reference| reference.document.path == "guide/index.md"));
         }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn native_image_reference_validation_uses_the_opened_target_extension() {
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file as symlink;
+
+        let directory = tempfile::tempdir().unwrap();
+        let supported = directory.path().join("pixel.PNG");
+        let unsupported = directory.path().join("notes.txt");
+        std::fs::write(&supported, b"image fixture").unwrap();
+        std::fs::write(&unsupported, b"text fixture").unwrap();
+        let image_named_link = directory.path().join("notes.png");
+        if let Err(error) = symlink(&unsupported, &image_named_link) {
+            #[cfg(windows)]
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("symlink test requires Developer Mode or symlink privilege");
+                return;
+            }
+            panic!("cannot create test symlink: {error}");
+        }
+        symlink(&supported, directory.path().join("pixel.link")).unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&directory.path().to_string_lossy()).unwrap();
+        let backend = SourceBackend::Native(NativeSource {
+            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
+        });
+        assert_eq!(
+            validate_image_reference(&backend, "guide.md", "notes.png", &roots),
+            Some(ReferenceProblemStatus::Unverifiable)
+        );
+        assert_eq!(
+            validate_image_reference(&backend, "guide.md", "pixel.link", &roots),
+            None
+        );
     }
 
     #[cfg(any(unix, windows))]
