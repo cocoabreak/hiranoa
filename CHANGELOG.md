@@ -2,6 +2,25 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.5] - 2026-11-20
+
+### Added
+
+- Save and switch between named workspace layouts, restoring open tabs, pane arrangement, zoom, and the visibility of the sidebar and table of contents.
+- Compare two revisions of a Markdown document in a local Git repository or compare a revision with the working copy. The rendered view supports synchronized scrolling, highlights inline changes, and displays images from each revision. The side-by-side source diff shows changed Markdown lines.
+
+### Changed
+
+- Reduced repeated work when assigning heading IDs and resolving Wiki links in the preview and document index.
+
+### Security
+
+- Hardened Markdown and Mermaid previews against unsafe content. Document styles stay within the preview, Mermaid respects external-image approval before loading, and the WebView blocks unintended navigation from previews and enlarged diagrams.
+- Applied the external-image setting to saved HTML and blocked unapproved image and media loads when the export is opened in a browser.
+- Strengthened Windows share approval and saved Explorer root checks. Document and image reads, ignore-rule loading, Wiki indexing, and document listing now apply stricter file and source boundary checks.
+- Limited Git history discovery and object reads to the approved scope. Git history loads verified loose and pack objects and disables automatic discovery of external object stores.
+- Updated DOMPurify and ZIP handling dependencies and patched the development-only picomatch dependency.
+
 ## [0.3.4] - 2026-11-16
 
 ### Added
