@@ -2,6 +2,7 @@ use crate::commands::file::readers::{
     native_image_mime_type, read_opened_image, UNSUPPORTED_IMAGE_FORMAT,
 };
 use crate::commands::file::safe_outline::{extract_safe_outline, SafeOutlineHeading};
+use crate::commands::file::trusted_paths::open_allowed_file;
 use crate::commands::file::{
     build_markdown_content, image_mime_type, normalize_path_for_frontend, read_dir_single_level,
     AllowedRoots, MarkdownFileContent, MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
@@ -641,14 +642,37 @@ fn resolve_native_path(
         source.root.join(relative)
     };
     let resolved = roots.resolve(&candidate.to_string_lossy())?;
-    if !resolved.starts_with(&source.root) {
-        return Err("ソースのルート外へ移動できません".to_string());
-    }
+    ensure_native_source_path(source, &resolved)?;
     Ok(resolved)
 }
 
-fn is_path_within_native_source(source: &NativeSource, path: &Path) -> bool {
-    path.starts_with(&source.root)
+fn ensure_native_source_path(source: &NativeSource, path: &Path) -> Result<(), String> {
+    if path.starts_with(&source.root) {
+        Ok(())
+    } else {
+        Err("ソースのルート外へ移動できません".to_string())
+    }
+}
+
+fn open_native_source_file(
+    source: &NativeSource,
+    virtual_path: &str,
+    roots: &AllowedRoots,
+) -> Result<(File, PathBuf), String> {
+    open_native_source_file_with(source, virtual_path, roots, open_allowed_file)
+}
+
+fn open_native_source_file_with(
+    source: &NativeSource,
+    virtual_path: &str,
+    roots: &AllowedRoots,
+    open: impl FnOnce(&AllowedRoots, &str) -> Result<(File, PathBuf), String>,
+) -> Result<(File, PathBuf), String> {
+    let path = resolve_native_path(source, virtual_path, roots)?;
+    let (file, final_path) = open(roots, &path.to_string_lossy())?;
+    // The final path belongs to the handle that callers will read from.
+    ensure_native_source_path(source, &final_path)?;
+    Ok((file, final_path))
 }
 
 /// Resolve directories only; missing index files are handled by the existing readers.
@@ -1644,12 +1668,8 @@ pub fn read_source_markdown(
     let backend = registry.get(&document.source_id)?;
     match backend.as_ref() {
         SourceBackend::Native(source) => {
-            let path = resolve_native_path(source, &document.path, &roots)?;
-            let (mut file, canonical) = crate::commands::file::trusted_paths::open_allowed_file(
-                &roots,
-                &path.to_string_lossy(),
-            )?;
-            if !crate::commands::has_markdown_extension(&canonical) {
+            let (mut file, final_path) = open_native_source_file(source, &document.path, &roots)?;
+            if !crate::commands::has_markdown_extension(&final_path) {
                 return Err("Markdownファイル（.md / .markdown）のみ読み込めます".to_string());
             }
             let byte_size = file.metadata().map_err(|error| error.to_string())?.len();
@@ -1690,14 +1710,7 @@ pub fn read_source_image(
     let backend = registry.get(&document.source_id)?;
     match backend.as_ref() {
         SourceBackend::Native(source) => {
-            let path = resolve_native_path(source, &document.path, &roots)?;
-            let (file, final_path) = crate::commands::file::trusted_paths::open_allowed_file(
-                &roots,
-                &path.to_string_lossy(),
-            )?;
-            if !is_path_within_native_source(source, &final_path) {
-                return Err("ソースのルート外へ移動できません".to_string());
-            }
+            let (file, final_path) = open_native_source_file(source, &document.path, &roots)?;
             read_opened_image(file, &final_path)
         }
         SourceBackend::Zip(source) => {
@@ -1837,14 +1850,8 @@ fn read_source_text_with_limit(
 ) -> Result<Option<String>, String> {
     match backend {
         SourceBackend::Native(source) => {
-            let path = resolve_native_path(source, path, roots)?;
-            let (mut file, canonical) = crate::commands::file::trusted_paths::open_allowed_file(
-                roots,
-                &path.to_string_lossy(),
-            )?;
-            if !is_path_within_native_source(source, &canonical)
-                || !is_markdown_virtual_path(canonical.to_string_lossy().as_ref())
-            {
+            let (mut file, final_path) = open_native_source_file(source, path, roots)?;
+            if !crate::commands::has_markdown_extension(&final_path) {
                 return Err("Markdown文書が現在のソース範囲外です".to_string());
             }
             if file
@@ -2276,7 +2283,7 @@ fn validate_image_reference(
                 &canonical.to_string_lossy(),
             ) {
                 Ok((file, final_path))
-                    if is_path_within_native_source(source, &final_path)
+                    if ensure_native_source_path(source, &final_path).is_ok()
                         && file.metadata().is_ok_and(|metadata| metadata.is_file()) =>
                 {
                     native_image_mime_type(&final_path)
@@ -3939,22 +3946,30 @@ mod tests {
     }
 
     #[test]
-    fn native_source_boundary_helper_rejects_another_allowed_root() {
-        let first = tempfile::tempdir().unwrap();
-        let second = tempfile::tempdir().unwrap();
+    fn native_source_open_rejects_a_handle_from_another_allowed_root() {
+        let directory = tempfile::tempdir().unwrap();
+        let first = directory.path().join("source");
+        let second = directory.path().join("source-other");
+        let roots = AllowedRoots::new();
+        for root in [&first, &second] {
+            std::fs::create_dir(root).unwrap();
+            std::fs::write(root.join("note.md"), "# Note").unwrap();
+            roots.register(&root.to_string_lossy()).unwrap();
+        }
         let source = NativeSource {
-            root: std::fs::canonicalize(first.path()).unwrap(),
+            root: roots.resolve(&first.to_string_lossy()).unwrap(),
         };
-        assert!(is_path_within_native_source(
-            &source,
-            &source.root.join("note.md")
-        ));
-        assert!(!is_path_within_native_source(
-            &source,
-            &std::fs::canonicalize(second.path())
-                .unwrap()
-                .join("note.md")
-        ));
+        assert!(open_native_source_file(&source, "note.md", &roots).is_ok());
+        let outside = second.join("note.md");
+        let outside_handle = open_allowed_file(&roots, &outside.to_string_lossy()).unwrap();
+        assert_eq!(
+            open_native_source_file_with(&source, "note.md", &roots, |_, resolved| {
+                assert_eq!(Path::new(resolved), source.root.join("note.md"));
+                Ok(outside_handle)
+            })
+            .unwrap_err(),
+            "ソースのルート外へ移動できません"
+        );
     }
 
     #[test]
