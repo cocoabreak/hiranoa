@@ -1,7 +1,7 @@
-#[cfg(unix)]
-use super::ignore_rules::open_direct;
 use super::ignore_rules::{open_rule_path, WalkRules};
 use super::persistent_trust::{directory_identity, DirectoryIdentity};
+#[cfg(unix)]
+use super::trusted_paths::open_path_without_links;
 use super::trusted_paths::{final_path_for_file, AllowedRoots};
 use crate::commands::has_markdown_extension;
 use std::ffi::OsString;
@@ -101,7 +101,7 @@ fn open_scan_root(path: &Path, roots: &AllowedRoots, list_entries: bool) -> Resu
     #[cfg(unix)]
     let file = {
         let _ = list_entries;
-        open_direct(&requested, true)
+        open_path_without_links(&requested, true)
     };
     let file = file.map_err(|error| format!("{ROOT_CHANGED}: {error}"))?;
     if !file.metadata().is_ok_and(|metadata| metadata.is_dir())
@@ -117,6 +117,32 @@ struct DirectoryEntry {
     name: OsString,
     kind: EntryKind,
     hidden: bool,
+}
+
+impl DirectoryEntry {
+    fn path_component(&self) -> Option<&Path> {
+        let name = Path::new(&self.name);
+        let mut components = name.components();
+        match (components.next(), components.next()) {
+            (Some(Component::Normal(part)), None) if part == self.name => Some(name),
+            _ => None,
+        }
+    }
+}
+
+/// Enumerates a bounded, already opened directory without reopening its path.
+pub(crate) fn read_directory_names(handle: File, limit: usize) -> io::Result<Vec<OsString>> {
+    let mut directory = DirectoryReader::new(handle)?;
+    let mut names = Vec::new();
+    while let Some(entry) = directory.next_entry()? {
+        if entry.path_component().is_some() {
+            if names.len() == limit {
+                return Err(io::Error::other("Directory entry limit exceeded"));
+            }
+            names.push(entry.name);
+        }
+    }
+    Ok(names)
 }
 
 enum EntryKind {
@@ -222,12 +248,9 @@ fn scan(
             }
             Err(error) => return Err(error),
         };
-        let name = Path::new(&entry.name);
-        if !matches!(name.components().next(), Some(Component::Normal(part)) if part == entry.name)
-            || name.components().count() != 1
-        {
+        let Some(name) = entry.path_component() else {
             continue;
-        }
+        };
         let (relative, directory) = pending.last().unwrap();
         let path = relative.join(name);
         let is_dir = matches!(entry.kind, EntryKind::Directory);

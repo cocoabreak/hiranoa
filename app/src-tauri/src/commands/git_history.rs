@@ -1,4 +1,8 @@
+use super::file::directory_scan::read_directory_names;
 use super::file::readers::native_image_mime_type;
+use super::file::trusted_paths::{
+    final_path_for_file, open_path_attributes_without_links, open_path_without_links,
+};
 use super::file::{
     image_mime_type, trusted_paths::open_allowed_file, AllowedRoots, NativeDialogState,
 };
@@ -7,7 +11,8 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use git2::{ObjectType, Odb, Oid, Repository};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::io::Read;
+use std::fs::{File, Metadata};
+use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -71,38 +76,80 @@ impl Drop for OpeningGuard<'_> {
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
-fn git_root(file: &Path) -> Result<PathBuf, String> {
+/// Without history consent, stop at the first ancestor outside AllowedRoots.
+/// A consented search is still restricted to this document's direct ancestors.
+fn git_root(file: &Path, before_consent: Option<&AllowedRoots>) -> Result<Option<PathBuf>, String> {
     if !super::has_markdown_extension(file) {
         return Err("Markdown only".into());
     }
-    for directory in file.ancestors().skip(1).take(64) {
-        if directory.join(".git").try_exists().map_err(err)? {
-            return Ok(directory.to_path_buf());
+    for directory in file
+        .ancestors()
+        .skip(1)
+        .take(64)
+        .take_while(|dir| dir.is_absolute())
+    {
+        let path = directory.join(".git");
+        let marker = if let Some(roots) = before_consent {
+            if roots.resolve_opened_path(directory.to_owned()).is_err() {
+                break;
+            }
+            roots
+                .inspect_allowed_path_without_links(&path)?
+                .map(|(_, metadata)| metadata)
+        } else {
+            git_path_attributes(&path)?
+        };
+        if let Some(marker) = marker {
+            if !marker.is_dir() {
+                return Err("External Git directories are not supported".into());
+            }
+            return Ok(Some(directory.to_path_buf()));
         }
     }
-    Err("No Git repository found".into())
+    Ok(None)
 }
+
+fn probe_git_path(
+    path: &Path,
+    open: impl FnOnce(&Path, bool) -> io::Result<File>,
+) -> Result<Option<File>, String> {
+    let file = match open(path, true) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(err(error)),
+    };
+    if final_path_for_file(&file)? != path {
+        return Err("Git path changed while it was being checked".into());
+    }
+    Ok(Some(file))
+}
+
+fn git_path_attributes(path: &Path) -> Result<Option<Metadata>, String> {
+    probe_git_path(path, open_path_attributes_without_links)?
+        .map(|file| file.metadata().map_err(err))
+        .transpose()
+}
+
 fn direct_directory(path: &Path, boundary: &Path) -> Result<PathBuf, String> {
-    let metadata = std::fs::symlink_metadata(path).map_err(err)?;
-    let canonical = std::fs::canonicalize(path).map_err(err)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() || !canonical.starts_with(boundary) {
+    if !path.starts_with(boundary)
+        || !git_path_attributes(path)?.is_some_and(|metadata| metadata.is_dir())
+    {
         return Err("External Git directories are not supported".into());
     }
-    Ok(canonical)
+    Ok(path.to_owned())
 }
-fn metadata_file(path: &Path, boundary: &Path, limit: u64) -> Result<(), String> {
-    let boundary = std::fs::canonicalize(boundary).map_err(err)?;
-    let metadata = std::fs::symlink_metadata(path).map_err(err)?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > limit
-        || !std::fs::canonicalize(path)
-            .map_err(err)?
-            .starts_with(&boundary)
-    {
+fn metadata_file(path: &Path, boundary: &Path, limit: u64) -> Result<Option<File>, String> {
+    if !path.starts_with(boundary) {
         return Err("Unsupported Git metadata file".into());
     }
-    Ok(())
+    let Some(file) = probe_git_path(path, open_path_without_links)? else {
+        return Ok(None);
+    };
+    let metadata = file.metadata().map_err(err)?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return Err("Unsupported Git metadata file".into());
+    }
+    Ok(Some(file))
 }
 struct HistoryRepository {
     repository: Repository,
@@ -115,12 +162,9 @@ impl std::ops::Deref for HistoryRepository {
         &self.repository
     }
 }
-fn read_metadata(path: &Path, boundary: &Path, limit: usize) -> Result<String, String> {
-    metadata_file(path, boundary, limit as u64)?;
+fn read_metadata(file: File, limit: usize) -> Result<String, String> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .map_err(err)?
-        .take(limit as u64 + 1)
+    file.take(limit as u64 + 1)
         .read_to_end(&mut bytes)
         .map_err(err)?;
     if bytes.len() > limit {
@@ -129,7 +173,8 @@ fn read_metadata(path: &Path, boundary: &Path, limit: usize) -> Result<String, S
     String::from_utf8(bytes).map_err(err)
 }
 fn head_id(git_dir: &Path) -> Result<Option<Oid>, String> {
-    let mut value = read_metadata(&git_dir.join("HEAD"), git_dir, 4096)?;
+    let head = metadata_file(&git_dir.join("HEAD"), git_dir, 4096)?.ok_or("Missing Git HEAD")?;
+    let mut value = read_metadata(head, 4096)?;
     for _ in 0..8 {
         let Some(reference) = value.trim().strip_prefix("ref: ") else {
             let value = value.trim();
@@ -146,20 +191,14 @@ fn head_id(git_dir: &Path) -> Result<Option<Oid>, String> {
         {
             return Err("Invalid Git HEAD".into());
         }
-        let mut candidate = git_dir.to_path_buf();
-        for part in Path::new(reference).components() {
-            candidate.push(part);
-            if candidate.is_dir() {
-                direct_directory(&candidate, git_dir)?;
-            }
-        }
-        if candidate.try_exists().map_err(err)? {
-            value = read_metadata(&candidate, git_dir, 4096)?;
+        let candidate = git_dir.join(Path::new(reference).components().collect::<PathBuf>());
+        if let Some(file) = metadata_file(&candidate, git_dir, 4096)? {
+            value = read_metadata(file, 4096)?;
             continue;
         }
         let packed = git_dir.join("packed-refs");
-        if packed.try_exists().map_err(err)? {
-            for line in read_metadata(&packed, git_dir, MAX_OBJECT_METADATA)?.lines() {
+        if let Some(file) = metadata_file(&packed, git_dir, MAX_OBJECT_METADATA as u64)? {
+            for line in read_metadata(file, MAX_OBJECT_METADATA)?.lines() {
                 if let Some((oid, name)) = line.split_once(' ') {
                     if name == reference {
                         if oid.len() != 40 {
@@ -183,38 +222,27 @@ fn open_repository(
         return Err("Git directory changed".into());
     }
     let objects = direct_directory(&git_dir.join("objects"), &git_dir)?;
-    if git_dir.join("commondir").exists()
-        || objects.join("info/alternates").exists()
-        || objects.join("info/http-alternates").exists()
+    if git_path_attributes(&git_dir.join("commondir"))?.is_some()
+        || git_path_attributes(&objects.join("info").join("alternates"))?.is_some()
+        || git_path_attributes(&objects.join("info").join("http-alternates"))?.is_some()
     {
         return Err("External Git object databases are not supported".into());
     }
-    if objects.join("pack").exists() {
-        direct_directory(&objects.join("pack"), &git_dir)?;
-        for (index, entry) in std::fs::read_dir(objects.join("pack"))
-            .map_err(err)?
-            .enumerate()
-        {
-            if index >= 128 {
-                return Err("Too many Git pack files".into());
-            }
-            metadata_file(
-                &entry.map_err(err)?.path(),
-                &git_dir,
-                2 * 1024 * 1024 * 1024,
-            )?;
+    let pack = objects.join("pack");
+    if let Some(directory) = probe_git_path(&pack, open_path_without_links)? {
+        if !directory.metadata().map_err(err)?.is_dir() {
+            return Err("Unsupported Git pack directory".into());
+        }
+        for name in read_directory_names(directory, 128).map_err(err)? {
+            metadata_file(&pack.join(name), &git_dir, 2 * 1024 * 1024 * 1024)?
+                .ok_or("Git pack file disappeared")?;
         }
     }
-    if objects.join("info").exists() {
-        direct_directory(&objects.join("info"), &git_dir)?;
-    }
-    if git_dir.join("packed-refs").exists() {
-        metadata_file(
-            &git_dir.join("packed-refs"),
-            &git_dir,
-            MAX_OBJECT_METADATA as u64,
-        )?;
-    }
+    metadata_file(
+        &git_dir.join("packed-refs"),
+        &git_dir,
+        MAX_OBJECT_METADATA as u64,
+    )?;
     let head = head_id(&git_dir)?;
     // Wrap only the validated object database. Opening a repository normally
     // would eagerly read local/global config, includes, grafts and shallow files.
@@ -246,9 +274,7 @@ fn bounded_object(
         .join("objects")
         .join(&name[..2])
         .join(&name[2..]);
-    if loose.exists() {
-        metadata_file(&loose, &repo.git_dir, 32 * 1024 * 1024)?;
-    }
+    metadata_file(&loose, &repo.git_dir, 32 * 1024 * 1024)?;
     let (size, actual) = repo.odb().map_err(err)?.read_header(oid).map_err(err)?;
     if actual != kind || size > limit {
         return Err("Git object exceeds the comparison limit".into());
@@ -351,8 +377,9 @@ fn read_allowed(roots: &AllowedRoots, path: &Path, limit: usize) -> Result<Vec<u
 }
 impl HistorySession {
     fn repository(&self, roots: &AllowedRoots) -> Result<HistoryRepository, String> {
-        if roots.resolve(&self.file.to_string_lossy())? != self.file
-            || std::fs::canonicalize(&self.root).map_err(err)? != self.root
+        if !roots
+            .inspect_allowed_path_without_links(&self.file)?
+            .is_some_and(|(opened, metadata)| opened == self.file && metadata.is_file())
         {
             return Err("Document or repository changed".into());
         }
@@ -441,13 +468,23 @@ pub async fn open_git_history(
         .map_err(|_| "History opening already in progress")?;
     let _opening = OpeningGuard(&state.1);
     let file = registry.history_document_path(&document, &roots)?;
-    let root = git_root(&file)?;
+    let known_root = git_root(&file, Some(&roots))?;
     let guard = dialogs.try_acquire()?;
     let ja = crate::menu::resolve_locale(&app) == "ja";
+    let display = super::file::normalize_path_for_display;
+    let repository = match (&known_root, ja) {
+        (Some(root), true) => format!("リポジトリ: {}", display(root)),
+        (Some(root), false) => format!("Repository: {}", display(root)),
+        (None, true) => "承認後、この文書の親フォルダーからリポジトリを探します。".into(),
+        (None, false) => {
+            "After approval, the app will look for a repository in this document's parent folders."
+                .into()
+        }
+    };
     let prompt = if ja {
-        format!("この文書と画像のGit履歴を読み取りますか？\n\n文書: {}\nリポジトリ: {}\n\nファイルを変更せず、通常のフォルダーアクセス権も広げません。", document.path, super::file::normalize_path_for_display(&root))
+        format!("この文書と画像のGit履歴を読み取りますか？\n\n文書: {}\n{repository}\n\nファイルを変更せず、通常のフォルダーアクセス権も広げません。", display(&file))
     } else {
-        format!("Read Git history for this document and its images?\n\nDocument: {}\nRepository: {}\n\nNo files are changed. Normal folder access is not expanded.", document.path, super::file::normalize_path_for_display(&root))
+        format!("Read Git history for this document and its images?\n\nDocument: {}\n{repository}\n\nNo files are changed. Normal folder access is not expanded.", display(&file))
     };
     let approved = isolated_test_approval(&file)
         || app
@@ -467,6 +504,10 @@ pub async fn open_git_history(
     if registry.history_document_path(&document, &roots)? != file {
         return Err("Document changed during confirmation".into());
     }
+    let root = match known_root {
+        Some(root) => root,
+        None => git_root(&file, None)?.ok_or("No Git repository found")?,
+    };
     let (repo, git_dir) = open_repository(&root, None)?;
     let relative = file.strip_prefix(&root).map_err(err)?.to_path_buf();
     let (commits, truncated) = history(&repo, &relative)?;
@@ -759,6 +800,67 @@ mod tests {
             let _guard = OpeningGuard(&flag);
         }
         assert!(!flag.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn history_discovery_stops_before_an_unapproved_parent() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        let docs = root.join("docs");
+        std::fs::create_dir(&docs).unwrap();
+        let file = docs.join("guide.md");
+        std::fs::write(&file, "# Guide").unwrap();
+        Repository::init(&root).unwrap();
+
+        let roots = AllowedRoots::new();
+        roots.register(&docs.to_string_lossy()).unwrap();
+        assert_eq!(git_root(&file, Some(&roots)).unwrap(), None);
+        assert_eq!(git_root(&file, None).unwrap(), Some(root.clone()));
+
+        roots.register(&root.to_string_lossy()).unwrap();
+        assert_eq!(git_root(&file, Some(&roots)).unwrap(), Some(root));
+    }
+
+    #[test]
+    fn direct_repository_discovery_rejects_a_git_pointer_without_resolving_it() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        let file = root.join("guide.md");
+        std::fs::write(&file, "# Guide").unwrap();
+        std::fs::write(root.join(".git"), "gitdir: unused").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&root.to_string_lossy()).unwrap();
+
+        assert_eq!(
+            git_root(&file, Some(&roots)).unwrap_err(),
+            "External Git directories are not supported"
+        );
+        assert!(git_root(&file, None).is_err());
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn a_link_is_never_a_direct_git_directory() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        let metadata = root.join("metadata");
+        std::fs::create_dir(&metadata).unwrap();
+        let marker = root.join(".git");
+        #[cfg(unix)]
+        let linked = std::os::unix::fs::symlink(&metadata, &marker);
+        #[cfg(windows)]
+        let linked = std::os::windows::fs::symlink_dir(&metadata, &marker);
+        #[cfg(windows)]
+        if linked.as_ref().err().and_then(io::Error::raw_os_error) == Some(1314) {
+            return; // This test runner cannot create filesystem links.
+        }
+        linked.unwrap();
+        let file = root.join("guide.md");
+        std::fs::write(&file, "# Guide").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&root.to_string_lossy()).unwrap();
+        assert!(git_root(&file, Some(&roots)).is_err());
+        assert!(git_root(&file, None).is_err());
     }
     #[test]
     fn reads_only_odb_without_config_includes_grafts_or_shallow() {

@@ -4,6 +4,7 @@ use crate::commands::has_markdown_extension;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::{File, Metadata};
+use std::io;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -50,6 +51,92 @@ pub(super) fn inspect_path(path: &Path) -> Result<Option<(PathBuf, Metadata)>, S
         Err(error) => Err(format!("パスを確認できませんでした: {error}")),
     }
 }
+
+/// Opens a path without following filesystem links in any component.
+/// Callers decide whether the path is authorized before selecting a share.
+#[cfg(windows)]
+pub(crate) fn open_path_without_links(path: &Path, allow_share: bool) -> io::Result<File> {
+    super::windows_open::open_direct(path, allow_share)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn open_path_without_links(path: &Path, _allow_share: bool) -> io::Result<File> {
+    open_unix_path_without_links(path, libc::O_RDONLY)
+}
+
+#[cfg(windows)]
+pub(crate) fn open_path_attributes_without_links(
+    path: &Path,
+    allow_share: bool,
+) -> io::Result<File> {
+    super::windows_open::open_direct_attributes(path, allow_share)
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn open_path_attributes_without_links(
+    path: &Path,
+    _allow_share: bool,
+) -> io::Result<File> {
+    let file = open_unix_path_without_links(path, libc::O_PATH)?;
+    // O_PATH | O_NOFOLLOW opens a link itself rather than rejecting it.
+    if file.metadata()?.file_type().is_symlink() {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(file)
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn open_path_attributes_without_links(
+    path: &Path,
+    _allow_share: bool,
+) -> io::Result<File> {
+    open_unix_path_without_links(path, libc::O_EVTONLY)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn open_unix_path_without_links(path: &Path, leaf_access: libc::c_int) -> io::Result<File> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut parts = path.components().peekable();
+    if parts.next() != Some(Component::RootDir) {
+        return Err(io::ErrorKind::InvalidInput.into());
+    }
+    let mut current = File::open("/")?;
+    while let Some(Component::Normal(part)) = parts.next() {
+        let name = CString::new(part.as_bytes())?;
+        #[cfg(target_os = "linux")]
+        let parent_access = libc::O_PATH | libc::O_DIRECTORY;
+        #[cfg(target_os = "macos")]
+        let parent_access = libc::O_SEARCH;
+        let access = if parts.peek().is_some() {
+            parent_access
+        } else {
+            leaf_access
+        };
+        let flags = access | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+        // SAFETY: current owns a live directory descriptor and name is NUL-terminated.
+        let fd = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: openat returned a new descriptor owned by this caller.
+        current = unsafe { File::from_raw_fd(fd) };
+        if parts.peek().is_none() {
+            return Ok(current);
+        }
+    }
+    Err(io::ErrorKind::InvalidInput.into())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+pub(crate) fn open_path_without_links(_path: &Path, _allow_share: bool) -> io::Result<File> {
+    Err(io::ErrorKind::Unsupported.into())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
+pub(crate) use self::open_path_without_links as open_path_attributes_without_links;
 
 /// ユーザーが明示的に許可したフォルダールートと単一ファイルの集合。
 /// 全ファイルアクセスはルート配下、または単一ファイルとの完全一致に限定される。
@@ -262,6 +349,22 @@ impl AllowedRoots {
             .transpose()
     }
 
+    pub(crate) fn inspect_allowed_path_without_links(
+        &self,
+        path: &Path,
+    ) -> Result<Option<(PathBuf, Metadata)>, String> {
+        self.resolve_opened_path(path.to_owned())?;
+        let requested = self.share_checked_input(path.to_str().ok_or("無効なパスです")?)?;
+        let file = match open_path_attributes_without_links(&requested, true) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(format!("パスを確認できませんでした: {error}")),
+        };
+        let opened = self.resolve_opened_path(final_path_for_file(&file)?)?;
+        let metadata = file.metadata().map_err(|error| error.to_string())?;
+        Ok(Some((opened, metadata)))
+    }
+
     pub(crate) fn resolve_opened_path(&self, canonical: PathBuf) -> Result<PathBuf, String> {
         let explorer_roots = {
             let entries = self.0.lock().unwrap();
@@ -391,7 +494,7 @@ pub(crate) fn open_allowed_file(
 }
 
 #[cfg(windows)]
-pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
+pub(crate) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
     use std::os::windows::ffi::OsStringExt;
     use std::os::windows::io::AsRawHandle;
     use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
@@ -417,14 +520,21 @@ pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
 }
 
 #[cfg(target_os = "linux")]
-pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
+pub(crate) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
-    std::fs::canonicalize(format!("/proc/self/fd/{}", file.as_raw_fd()))
-        .map_err(|e| format!("ファイル最終パスの取得に失敗しました: {}", e))
+    use std::os::unix::fs::MetadataExt;
+    let path = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+        .map_err(|e| format!("ファイル最終パスの取得に失敗しました: {e}"))?;
+    // The fd link reports the kernel's path. Re-resolving that path can touch
+    // a different target before callers have compared it with the trust boundary.
+    if !path.is_absolute() || file.metadata().map_err(|error| error.to_string())?.nlink() == 0 {
+        return Err("開いたファイルの最終パスを確認できません".into());
+    }
+    Ok(path)
 }
 
 #[cfg(target_os = "macos")]
-pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
+pub(crate) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
     use std::os::fd::AsRawFd;
     use std::os::unix::ffi::OsStrExt;
 
@@ -441,7 +551,7 @@ pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
 }
 
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
-pub(super) fn final_path_for_file(_file: &File) -> Result<PathBuf, String> {
+pub(crate) fn final_path_for_file(_file: &File) -> Result<PathBuf, String> {
     Err("このOSでは安全なファイル読込を利用できません".to_string())
 }
 

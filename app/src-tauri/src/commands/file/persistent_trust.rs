@@ -41,18 +41,22 @@ impl ExplorerRoot {
     pub(super) fn inspect(path: &Path) -> Result<Self, String> {
         let handle =
             open_folder(path).map_err(|error| format!("フォルダーを開けません: {error}"))?;
+        Self::from_handle(&handle)
+    }
+
+    fn from_handle(handle: &File) -> Result<Self, String> {
         let metadata = handle.metadata().map_err(|error| error.to_string())?;
         if !metadata.is_dir() {
             return Err("フォルダーを指定してください".to_string());
         }
-        let path = final_path_for_file(&handle)?;
+        let path = final_path_for_file(handle)?;
         if let Some(reason) = dangerous_root_reason(&path) {
             return Err(reason.to_string());
         }
         Ok(Self {
             version: APPROVAL_VERSION,
             path,
-            identity: directory_identity(&handle, &metadata),
+            identity: directory_identity(handle, &metadata),
         })
     }
 
@@ -61,7 +65,15 @@ impl ExplorerRoot {
     }
 
     pub(super) fn still_matches(&self) -> bool {
-        Self::inspect(&self.path).is_ok_and(|current| current == *self)
+        #[cfg(windows)]
+        let opened = super::windows_open::open_scan_directory(&self.path, false);
+        #[cfg(not(windows))]
+        let opened = super::trusted_paths::open_path_attributes_without_links(&self.path, true);
+        opened
+            .ok()
+            .and_then(|handle| Self::from_handle(&handle).ok())
+            .as_ref()
+            == Some(self)
     }
 }
 

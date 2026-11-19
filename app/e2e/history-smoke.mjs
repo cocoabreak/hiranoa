@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import {
   WebView2Driver,
@@ -78,14 +79,20 @@ writeFileSync(
   path.join(stateDir, "settings.json"),
   JSON.stringify({ settings: { language: "en", checkForUpdatesOnStartup: false } })
 );
-globalThis.process.env.HIRANOA_E2E_GIT_HISTORY_APPROVE = "1";
+const nativeConsent = globalThis.process.argv.includes("--native-consent");
+if (nativeConsent) delete globalThis.process.env.HIRANOA_E2E_GIT_HISTORY_APPROVE;
+else globalThis.process.env.HIRANOA_E2E_GIT_HISTORY_APPROVE = "1";
 let child, diagnostics, network;
 const requests = [];
 const evaluate = (code) => driver.evaluate(code);
 const waitReady = () =>
   driver.waitFor(
     `document.querySelector('.history-view')?.getAttribute('aria-busy') === 'false' && !document.querySelector('.history-view [role=alert]')`,
-    { timeoutMs: 30000 }
+    { timeoutMs: nativeConsent ? 120000 : 30000 }
+  );
+const openHistory = () =>
+  evaluate(
+    `(async()=>{(await import('/src/lib/commands/registry.ts')).runCommand('history.compare')})()`
   );
 const select = async (index, value) =>
   evaluate(
@@ -121,9 +128,30 @@ try {
   const original = await evaluate(
     `(async()=>({tabs:(await import('/src/lib/stores/tab.svelte.ts')).tabStore.allTabs.map(t=>t.id),panes:[...(await import('/src/lib/stores/workspace.svelte.ts')).workspaceStore.paneIds]}))()`
   );
-  await evaluate(
-    `(async()=>{(await import('/src/lib/commands/registry.ts')).runCommand('history.compare')})()`
-  );
+  if (nativeConsent) {
+    await openHistory();
+    await driver.waitFor("document.querySelector('.history-view') !== null");
+    globalThis.console.log("Waiting for No in the native Git history dialog");
+    await driver.waitFor("document.querySelector('.history-view') === null", {
+      timeoutMs: 120000,
+    });
+    assert.equal(
+      await evaluate(`document.querySelector('[role=main]')?.textContent.includes('Timeout: 90')`),
+      true
+    );
+    globalThis.console.log("PASS rejecting Git history leaves the original preview visible");
+    const control = createInterface({
+      input: globalThis.process.stdin,
+      output: globalThis.process.stdout,
+    });
+    try {
+      await control.question("Press Enter to open the native approval dialog again. ");
+    } finally {
+      control.close();
+    }
+  }
+  await openHistory();
+  if (nativeConsent) globalThis.console.log("Waiting for Yes in the native Git history dialog");
   await waitReady();
   assert.equal(
     await evaluate(`document.querySelectorAll('.history-view .history-document').length`),

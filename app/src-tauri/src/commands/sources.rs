@@ -502,7 +502,20 @@ impl SourceRegistry {
     ) -> Result<PathBuf, String> {
         let backend = self.get(&document.source_id)?;
         match backend.as_ref() {
-            SourceBackend::Native(source) => resolve_native_path(source, &document.path, roots),
+            SourceBackend::Native(source) => {
+                let relative = normalize_virtual_path(&document.path)?;
+                let path = source.root.join(relative);
+                ensure_native_source_path(source, &path)?;
+                let (opened, metadata) = roots
+                    .inspect_allowed_path_without_links(&path)
+                    .map_err(|_| "Git history requires a document inside the approved source without following filesystem links")?
+                    .ok_or("Document not found")?;
+                if !metadata.is_file() {
+                    return Err("Git history requires a regular document".into());
+                }
+                ensure_native_source_path(source, &opened)?;
+                Ok(opened)
+            }
             SourceBackend::Zip(_) => Err("Git history requires a native document".to_string()),
         }
     }
@@ -3429,6 +3442,28 @@ mod tests {
         assert_eq!(first.id, second.id);
         assert_eq!(registry.get(&first.id).unwrap().kind(), "native");
         assert!(registry.get("unknown").is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn history_uses_the_canonical_spelling_of_a_direct_document() {
+        let temp = tempfile::tempdir().unwrap();
+        let actual = temp.path().join("note.md");
+        std::fs::write(&actual, "# Note").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&temp.path().to_string_lossy()).unwrap();
+        let root = roots.resolve(&temp.path().to_string_lossy()).unwrap();
+        let expected = roots.resolve(&actual.to_string_lossy()).unwrap();
+        let registry = SourceRegistry::new();
+        let source = registry.register_native(root, &roots).unwrap();
+        let document = DocumentRef {
+            source_id: source.id,
+            path: "NOTE.md".into(),
+        };
+        assert_eq!(
+            registry.history_document_path(&document, &roots).unwrap(),
+            expected
+        );
     }
 
     #[test]

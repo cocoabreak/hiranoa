@@ -1,11 +1,9 @@
-use super::trusted_paths::{final_path_for_file, AllowedRoots};
+use super::trusted_paths::{final_path_for_file, open_path_without_links, AllowedRoots};
 use ignore::{
     gitignore::{Gitignore, GitignoreBuilder, Glob},
     DirEntry, Match, Walk, WalkBuilder,
 };
 use std::fs::File;
-#[cfg(not(windows))]
-use std::io;
 use std::io::{BufRead, Read};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
@@ -233,7 +231,7 @@ fn git_path(base: &Path, value: &str) -> Option<PathBuf> {
 pub(super) fn open_rule_path(roots: &AllowedRoots, path: &Path) -> Option<File> {
     roots.resolve_opened_path(path.to_path_buf()).ok()?;
     let requested = roots.share_checked_input(path.to_str()?).ok()?;
-    let file = open_direct(&requested, true).ok()?;
+    let file = open_path_without_links(&requested, true).ok()?;
     roots
         .resolve_opened_path(final_path_for_file(&file).ok()?)
         .ok()?;
@@ -315,8 +313,9 @@ fn load_global_rules(
     mut configs: impl Iterator<Item = PathBuf>,
 ) -> Gitignore {
     static EXCLUDES_FILE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
-    let open_local =
-        |path: PathBuf| open_direct(&std::path::absolute(cwd.join(path)).ok()?, false).ok();
+    let open_local = |path: PathBuf| {
+        open_path_without_links(&std::path::absolute(cwd.join(path)).ok()?, false).ok()
+    };
     let setting = EXCLUDES_FILE.get_or_init(|| {
         regex::Regex::new(
             r#"(?imR)^[ \t]*excludesfile[ \t]*=[ \t]*"?[ \t]*(\S[^"\r\n]*?)[ \t]*"?[ \t]*$"#,
@@ -337,44 +336,6 @@ fn load_global_rules(
         })
         .or_else(|| xdg.map(|path| path.join("git/ignore")));
     matcher(cwd, excludes.and_then(open_local))
-}
-
-#[cfg(windows)]
-pub(super) use super::windows_open::open_direct;
-
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(super) fn open_direct(path: &Path, _allow_share: bool) -> io::Result<File> {
-    use std::ffi::CString;
-    use std::os::fd::{AsRawFd, FromRawFd};
-    use std::os::unix::ffi::OsStrExt;
-
-    let mut parts = path.components().peekable();
-    if parts.next() != Some(Component::RootDir) {
-        return Err(io::ErrorKind::InvalidInput.into());
-    }
-    let mut current = File::open("/")?;
-    while let Some(Component::Normal(part)) = parts.next() {
-        let name = CString::new(part.as_bytes())?;
-        let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
-        if parts.peek().is_some() {
-            flags |= libc::O_DIRECTORY;
-        }
-        // Keep each parent open while opening its child, without following links.
-        let fd = unsafe { libc::openat(current.as_raw_fd(), name.as_ptr(), flags) };
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        current = unsafe { File::from_raw_fd(fd) };
-        if parts.peek().is_none() {
-            return Ok(current);
-        }
-    }
-    Err(io::ErrorKind::InvalidInput.into())
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
-fn open_direct(_path: &Path, _allow_share: bool) -> io::Result<File> {
-    Err(io::ErrorKind::Unsupported.into())
 }
 
 #[cfg(test)]
