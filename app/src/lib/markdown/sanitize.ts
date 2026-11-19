@@ -18,5 +18,7 @@ export function sanitizeHtml(html: string): string {
     // style要素は外部画像URLをCSSエスケープで難読化でき、属性単位の保護を
     // 迂回しうる。Markdown本文で正当な用途もないため禁止する。
     FORBID_TAGS: ["form", "style"],
+    // 表やセルの旧式の背景画像属性からもブラウザーが画像を取得する。
+    FORBID_ATTR: ["background"],
   });
 }

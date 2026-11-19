@@ -85,6 +85,7 @@
     return () => workspaceStore.setRoot(paneId, undefined);
   });
   let renderedHtml = $state("");
+  let renderError = $state<string | null>(null);
   let isLoading = $state(false);
   let currentMarks: HTMLElement[] = []; // 検索ハイライトの現在のmark要素（他のimperativeなDOMハンドルと同様、通常変数）
   let currentMarkedElement: HTMLElement | null = null;
@@ -249,6 +250,7 @@
       codeTheme,
       showLineNumbers,
     };
+    renderError = null;
 
     if (!raw || safeMode || sourceMode) {
       cancelMarkdownRender();
@@ -285,7 +287,9 @@
       .catch((err) => {
         if (generation !== renderGeneration) return;
         console.error("[render] error:", err);
-        renderedHtml = `<pre style="color:red;padding:1rem">${m.viewer.renderError(err)}</pre>`;
+        renderedHtml = "";
+        externalImageCount = 0;
+        renderError = m.viewer.renderError(err);
         isLoading = false;
       });
   });
@@ -744,7 +748,7 @@
         document: tab.document,
         source: tab.source,
       },
-      renderedHtml,
+      renderedHtml: renderError === null ? renderedHtml : null,
       renderMode: tab.renderMode ?? "full",
       viewMode: tab.viewMode ?? "rendered",
     });
@@ -839,6 +843,8 @@
       />
     {:else if isSourceMode && activeContent}
       <SourceView raw={activeContent.raw} headings={activeContent.safeOutline} />
+    {:else if renderError !== null}
+      <pre class="whitespace-pre-wrap p-4 text-destructive" role="alert">{renderError}</pre>
     {:else if activeContent}
       {@html renderedHtml}
     {:else}

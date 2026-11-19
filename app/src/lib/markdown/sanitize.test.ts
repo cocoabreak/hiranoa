@@ -2,6 +2,15 @@ import { describe, it, expect } from "vitest";
 import { sanitizeHtml } from "./sanitize";
 
 describe("sanitizeHtml", () => {
+  it("表・行・セルの外部背景画像属性を除去し、表の内容を保持する", () => {
+    const table =
+      '<table background="https://example.com/table.png">' +
+      '<tr background="https://example.com/row.png">' +
+      '<td background="https://example.com/cell.png">内容</td></tr></table>';
+    const result = sanitizeHtml(table);
+    expect(result).toBe("<table><tbody><tr><td>内容</td></tr></tbody></table>");
+  });
+
   it("外部取得を隠せるstyle要素を除去する", () => {
     const result = sanitizeHtml(
       "<style>body{background:url(https://example.com/a.png)}</style><p>x</p>"
