@@ -28,7 +28,7 @@ function headingAnchorText(element: Element): string {
  * GitHub風のslug化を行い、重複IDにはサフィックスを付けて一意にする。
  * 既存IDは尊重し、衝突する場合のみ番号を付ける。
  */
-export function buildToc(container: HTMLElement): TocHeading[] {
+export function buildToc(container: HTMLElement | DocumentFragment): TocHeading[] {
   const els = container.querySelectorAll("h1,h2,h3,h4,h5,h6");
   const allocateId = createHeadingIdAllocator();
 

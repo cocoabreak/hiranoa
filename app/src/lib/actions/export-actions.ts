@@ -8,12 +8,16 @@ import type { PostRenderContext } from "$lib/plugins";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { settingsStore } from "$lib/stores/settings.svelte";
-import { areExternalImagesApprovedForDocument } from "$lib/stores/external-image-permission";
+import { mayLoadExternalImages } from "$lib/stores/external-image-permission";
+import type { Tab } from "$lib/types";
+import { hydrateLocalImages } from "$lib/markdown/local-images";
 import { waitForLocalFonts } from "$lib/local-fonts/local-fonts.svelte";
 import { CALLOUT_STYLES } from "$lib/plugins/markdown-dialects/styles";
 
 export const MAX_PNG_DIMENSION = 16_384;
 export const MAX_PNG_PIXELS = 25_000_000;
+// Reserve room for document markup under the native command's 64 MiB export limit.
+const MAX_HTML_EMBEDDED_IMAGE_CHARS = 32 * 1024 * 1024;
 
 export function validatePngDimensions(width: number, height: number): void {
   if (
@@ -47,10 +51,10 @@ export async function printDocument(container = workspaceStore.root(), expectedT
     rootPath: explorerStore.rootPath,
     respectGitignore: settingsStore.settings.respectGitignore,
     locale: i18n.locale,
-    externalImagesAllowed:
-      settingsStore.settings.externalImagePolicy === "allow" ||
-      (settingsStore.settings.externalImagePolicy === "ask" &&
-        areExternalImagesApprovedForDocument(activeTab.path)),
+    externalImagesAllowed: mayLoadExternalImages(
+      settingsStore.settings.externalImagePolicy,
+      activeTab.path
+    ),
   };
   for (const plugin of viewerPlugins) {
     if (!plugin.beforePrint) continue;
@@ -89,20 +93,44 @@ function escapeHtml(text: string): string {
     .replace(/"/g, "&quot;");
 }
 
-export async function saveAsHtml(title: string, renderedHtml: string) {
+export async function saveAsHtml(
+  tab: Pick<Tab, "title" | "path" | "document" | "source">,
+  renderedHtml: string
+) {
   try {
     // titleはファイル名由来の非制御文字列。生挿入すると `</title><script>` 等で
     // エクスポート先HTMLにスクリプト注入されうるためエスケープする（renderedHtmlは
     // レンダリング時にDOMPurifyでサニタイズ済み）。
-    const safeTitle = escapeHtml(title);
-    const canonical = document.createElement("div");
+    const safeTitle = escapeHtml(tab.title);
+    // Keep the fragment inert while preparing it. The saved document does not inherit WebView CSP.
+    const canonical = document.createElement("template");
     canonical.innerHTML = renderedHtml;
-    buildToc(canonical);
-    renderedHtml = canonical.innerHTML;
+    const content = canonical.content;
+    // Resource hints can use the union of CSP sources, so remove them even when HTTPS images are allowed.
+    for (const element of content.querySelectorAll(
+      "base, link, meta, audio source, video source, track"
+    )) {
+      element.remove();
+    }
+    for (const media of content.querySelectorAll("audio[src], video[src]"))
+      media.removeAttribute("src");
+    for (const link of content.querySelectorAll("[ping]")) link.removeAttribute("ping");
+    buildToc(content);
+    if (tab.document && tab.source) {
+      await hydrateLocalImages(content, tab.document, tab.source, {
+        maxDataUrlChars: MAX_HTML_EMBEDDED_IMAGE_CHARS,
+        forExport: true,
+      }).done;
+    }
+    const imageSources = mayLoadExternalImages(settingsStore.settings.externalImagePolicy, tab.path)
+      ? "data: https:"
+      : "data:";
+    const policy = `default-src 'none'; img-src ${imageSources}; media-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'`;
     const htmlContent = `<!DOCTYPE html>
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="${policy}">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${safeTitle}</title>
   <style>
@@ -142,13 +170,13 @@ ${CALLOUT_STYLES}
   </style>
 </head>
 <body class="markdown-body">
-${renderedHtml}
+${canonical.innerHTML}
 </body>
 </html>`;
 
     await invoke("save_text_export", {
       format: "html",
-      suggestedName: title,
+      suggestedName: tab.title,
       contents: htmlContent,
     });
   } catch (err) {

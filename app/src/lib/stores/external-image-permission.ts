@@ -1,3 +1,5 @@
+import type { ExternalImagePolicy } from "./settings.svelte";
+
 const listeners = new Set<() => void>();
 export function subscribeExternalImageApprovals(listener: () => void) {
   listeners.add(listener);
@@ -15,6 +17,10 @@ export function approveExternalImagesForDocument(path: string): void {
 
 export function areExternalImagesApprovedForDocument(path: string): boolean {
   return path !== "" && approvedDocumentPaths.has(path);
+}
+
+export function mayLoadExternalImages(policy: ExternalImagePolicy, path: string): boolean {
+  return policy === "allow" || (policy === "ask" && areExternalImagesApprovedForDocument(path));
 }
 
 /** テスト用。許可は永続化せず、実アプリではプロセス終了時に破棄される。 */
