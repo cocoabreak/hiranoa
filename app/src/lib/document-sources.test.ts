@@ -6,6 +6,7 @@ import {
   nativePathToDocument,
   resolveDocumentPath,
   resolveDocumentTarget,
+  resolveLocalPath,
   resolveSourceRelativeMarkdownTarget,
 } from "$lib/document-sources";
 
@@ -37,6 +38,28 @@ const zipSource: DocumentSourceInfo = {
 };
 
 describe("document source paths", () => {
+  it("共有パスはソース外リンクでも共有名とUNC形式を維持する", () => {
+    expect(resolveLocalPath("//fileserver/team/docs/start.md", "../other/read%20me.md")).toBe(
+      "//fileserver/team/other/read me.md"
+    );
+    expect(resolveLocalPath("//fileserver/team/docs/start.md", "../../../index.md")).toBe(
+      "//fileserver/team/index.md"
+    );
+    expect(resolveLocalPath("C:/docs/start.md", "//fileserver/team/read%20me.md")).toBe(
+      "//fileserver/team/read me.md"
+    );
+    expect(resolveLocalPath("C:/docs/start.md", "../other/index.md")).toBe("C:/other/index.md");
+  });
+
+  it("共有内のフォルダー名は大文字小文字を区別して照合する", () => {
+    const source = { ...nativeSource, nativePath: "//fileserver/team/docs" };
+    const base = { sourceId: source.id, path: "start.md" };
+    expect(resolveDocumentTarget(source, base, "//FILESERVER/TEAM/docs/page.md")?.path).toBe(
+      "page.md"
+    );
+    expect(resolveDocumentTarget(source, base, "//fileserver/team/DOCS/page.md")).toBeNull();
+  });
+
   it("source IDを含む衝突しないタブキーを生成する", () => {
     expect(documentKey({ sourceId: "a", path: "guide/read me.md" })).toBe("a:guide%2Fread%20me.md");
     expect(documentKey({ sourceId: "b", path: "guide/read me.md" })).not.toBe(

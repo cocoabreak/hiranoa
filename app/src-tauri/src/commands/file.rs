@@ -11,6 +11,7 @@ mod persistent_trust;
 pub(crate) mod readers;
 pub(crate) mod safe_outline;
 pub(crate) mod trusted_paths;
+mod windows_share;
 
 pub use dialogs::NativeDialogState;
 pub use external_editor::ExternalEditorState;

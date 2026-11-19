@@ -38,9 +38,13 @@ export function nativeDocumentPath(
 
 function nativeComparisonPath(path: string): string {
   const normalized = normalizePath(path);
-  return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//")
-    ? normalized.toLowerCase()
-    : normalized;
+  if (normalized.startsWith("//")) {
+    // Keep the path within the share case-sensitive to match the Rust preflight.
+    return normalized.replace(/^\/\/[^/]+\/[^/]+/, (share) =>
+      share.replace(/[A-Z]/g, (letter) => letter.toLowerCase())
+    );
+  }
+  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 export function nativePathsEqual(left: string, right: string): boolean {
@@ -114,6 +118,34 @@ function decodeMarkdownPath(target: string): string | null {
   } catch {
     return null;
   }
+}
+
+/** ソース外の相対リンクも現在のネイティブパスを基準に解決する。 */
+export function resolveLocalPath(currentFilePath: string, href: string): string {
+  const current = normalizePath(currentFilePath);
+  const decoded = normalizePath(decodeMarkdownPath(href) ?? href);
+  const normalized =
+    decoded.startsWith("//") || current.startsWith("//") ? decoded : normalizePath(href);
+  if (normalized.startsWith("/") || /^[A-Za-z]:\//.test(normalized)) return normalized;
+
+  const directory = current.split("/").slice(0, -1);
+  // UNCのサーバー・共有名は相対パスの .. で取り除かない。
+  const share = current.startsWith("//") ? directory.splice(0, 4).join("/") : "";
+  const resolved: string[] = [];
+  for (const part of [...directory, ...normalized.split("/")]) {
+    if (part === "..") {
+      resolved.pop();
+    } else if (part !== "." && part !== "") {
+      resolved.push(part);
+    }
+  }
+
+  if (share) return `${share}/${resolved.join("/")}`;
+  const first = resolved[0];
+  if (first && /^[A-Za-z]:$/.test(first)) {
+    return first + "/" + resolved.slice(1).join("/");
+  }
+  return "/" + resolved.join("/");
 }
 
 function resolveSourceRootPath(base: DocumentRef, target: string): DocumentRef | null {
