@@ -318,13 +318,49 @@ try {
     });
   });
 
-  await test("ZIP内Markdownを表示できる", async () => {
-    await open("openArchive", fixtures.archive);
-    await driver.evaluate("window.__e2e.openArchiveEntry('inside.md')");
-    await driver.waitFor(
-      `document.querySelector('[role="main"]')?.innerText.includes('zip-smoke-marker')`
-    );
-  });
+  for (const kind of ["native", "zip"]) {
+    await test(`${kind}: 対応画像を表示し非対応形式を拒否する`, async () => {
+      if (kind === "native") {
+        await open("openMarkdownFile", fixtures.compatibility);
+      } else {
+        await open("openArchive", fixtures.archive);
+        await driver.evaluate("window.__e2e.openArchiveEntry('inside.md')");
+        await driver.waitFor(
+          `document.querySelector('[role="main"]')?.innerText.includes('zip-smoke-marker')`
+        );
+      }
+      await driver.waitFor(`(() => {
+        const image = document.querySelector('.markdown-body img[alt="Supported format"]');
+        return image?.getAttribute('src')?.startsWith('data:image/gif;base64,') && image.naturalWidth === 1;
+      })()`);
+      const result = await driver.evaluate(`(async () => {
+        const { tabStore } = await import('/src/lib/stores/tab.svelte.ts');
+        const tab = tabStore.tabs.find(tab => tab.id === tabStore.activeTabId);
+        const { invoke } = window.__TAURI_INTERNALS__;
+        const read = async (command, args) => {
+          try {
+            await invoke(command, args);
+            return null;
+          } catch (error) {
+            return String(error);
+          }
+        };
+        const sourceError = await read('read_source_image', {
+          document: { ...tab.document, path: 'images/pixel.txt' }
+        });
+        const directError = ${kind === "native"} ? await read('read_image_data_url', {
+          path: ${js(path.join(path.dirname(fixtures.compatibility), "images/pixel.txt"))}
+        }) : null;
+        const image = document.querySelector('.markdown-body img[alt="Unsupported format"]');
+        return { sourceError, directError, unsupportedHasSource: image?.hasAttribute('src') };
+      })()`);
+      assert.deepEqual(result, {
+        sourceError: "対応していない画像形式です",
+        directError: kind === "native" ? "対応していない画像形式です" : null,
+        unsupportedHasSource: false,
+      });
+    });
+  }
 
   for (const kind of ["native", "zip"]) {
     await test(`${kind}: ディレクトリーリンクのプレビュー・アンカー・タブを統一する`, async () => {

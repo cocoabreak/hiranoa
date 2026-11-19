@@ -13,10 +13,6 @@ function crc32(buffer) {
   return (crc ^ 0xffffffff) >>> 0;
 }
 
-function createStoredZip(entryName, content) {
-  return createStoredZipEntries([[entryName, content]]);
-}
-
 function createStoredZipEntries(entries) {
   const locals = [];
   const centrals = [];
@@ -122,6 +118,8 @@ export function createFixtures(root) {
     ].join("\n\n")
   );
   writeFileSync(belowLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES - 1, "Below limit"));
+  const imageReferences =
+    "![Supported format](images/pixel.GIF)\n\n![Unsupported format](images/pixel.txt)\n";
   writeFileSync(
     compatibility,
     [
@@ -137,10 +135,24 @@ export function createFixtures(root) {
       "www.example.com user@example.com https://example.com/。次の文",
       "[local](guide/index.md) [[guide/index|Local Wiki]]",
       '<map name="compatibility-map"><area alt="Local guide" href="guide/index.md"></map>',
+      imageReferences,
     ].join("\n\n")
   );
   writeFileSync(atLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES, "At limit"));
-  writeFileSync(archive, createStoredZip("inside.md", "# Archive\n\nzip-smoke-marker\n"));
+  const image = Buffer.from("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7", "base64");
+  const imageEntries = [
+    ["images/pixel.GIF", image],
+    ["images/pixel.txt", image],
+  ];
+  mkdirSync(path.join(root, "images"), { recursive: true });
+  for (const [name, bytes] of imageEntries) writeFileSync(path.join(root, name), bytes);
+  writeFileSync(
+    archive,
+    createStoredZipEntries([
+      ["inside.md", `# Archive\n\nzip-smoke-marker\n\n${imageReferences}`],
+      ...imageEntries,
+    ])
+  );
   const directoryLinks = path.join(root, "directory-links.md");
   const directoryArchive = path.join(root, "directory-links.zip");
   const directoryEntries = [

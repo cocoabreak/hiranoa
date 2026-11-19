@@ -1,6 +1,4 @@
 #[cfg(test)]
-use base64::{engine::general_purpose::STANDARD, Engine};
-#[cfg(test)]
 use std::fs::File;
 #[cfg(test)]
 use std::path::{Path, PathBuf};
@@ -20,14 +18,14 @@ pub(crate) use persistent_trust::restore_persisted_explorer_root;
 use persistent_trust::validate_persisted_explorer_root;
 pub use persistent_trust::PersistentExplorerRoot;
 pub(crate) use readers::{
-    build_markdown_content, mime_from_extension, normalize_path_for_display,
+    build_markdown_content, image_mime_type, normalize_path_for_display,
     normalize_path_for_frontend, read_dir_single_level, read_file_inner, MarkdownFileContent,
     MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
 };
 #[cfg(test)]
 use readers::{
     observed_markdown_size, read_custom_css_inner, read_file_with_size_inner,
-    requires_large_markdown_confirmation, LARGE_MARKDOWN_WARNING_BYTES,
+    read_image_data_url_inner, requires_large_markdown_confirmation, LARGE_MARKDOWN_WARNING_BYTES,
 };
 #[cfg(test)]
 use trusted_paths::dangerous_root_reason;
@@ -559,14 +557,8 @@ mod tests {
         fs::write(&file, [0x89, 0x50, 0x4e, 0x47]).unwrap();
 
         let roots = roots_with(dir.path());
-        let canonical = roots.resolve(&file.to_string_lossy()).unwrap();
-        let bytes = std::fs::read(&canonical).unwrap();
-        let data_url = format!(
-            "data:{};base64,{}",
-            mime_from_extension(&canonical),
-            STANDARD.encode(bytes)
-        );
-        assert!(data_url.starts_with("data:image/png;base64,"));
+        let data_url = read_image_data_url_inner(&roots, &file.to_string_lossy()).unwrap();
+        assert_eq!(data_url, "data:image/png;base64,iVBORw==");
     }
 
     #[test]
@@ -577,17 +569,77 @@ mod tests {
         fs::write(&outside_file, [0x89, 0x50, 0x4e, 0x47]).unwrap();
 
         let roots = roots_with(root_dir.path());
-        assert!(roots.resolve(&outside_file.to_string_lossy()).is_err());
+        assert!(read_image_data_url_inner(&roots, &outside_file.to_string_lossy()).is_err());
     }
 
     #[test]
-    fn mime_from_extension_detects_common_image_types() {
-        assert_eq!(mime_from_extension(Path::new("a.PNG")), "image/png");
-        assert_eq!(mime_from_extension(Path::new("a.jpg")), "image/jpeg");
-        assert_eq!(mime_from_extension(Path::new("a.svg")), "image/svg+xml");
+    fn read_image_data_url_rejects_unsupported_and_missing_extensions() {
+        let dir = tempfile::tempdir().unwrap();
+        let roots = roots_with(dir.path());
+        for name in ["notes.txt", "no-extension"] {
+            let file = dir.path().join(name);
+            fs::write(&file, b"fixture").unwrap();
+            assert_eq!(
+                read_image_data_url_inner(&roots, &file.to_string_lossy()).unwrap_err(),
+                readers::UNSUPPORTED_IMAGE_FORMAT
+            );
+        }
+    }
+
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn read_image_data_url_uses_the_opened_target_extension_for_symlinks() {
+        #[cfg(unix)]
+        use std::os::unix::fs::symlink;
+        #[cfg(windows)]
+        use std::os::windows::fs::symlink_file as symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let non_image = dir.path().join("notes.txt");
+        let image = dir.path().join("image.PNG");
+        fs::write(&non_image, b"fixture").unwrap();
+        fs::write(&image, [0x89, 0x50, 0x4e, 0x47]).unwrap();
+        let image_named_link = dir.path().join("notes.png");
+        let other_named_link = dir.path().join("image.link");
+        if let Err(error) = symlink(&non_image, &image_named_link) {
+            #[cfg(windows)]
+            if error.raw_os_error() == Some(1314) {
+                eprintln!("symlink test requires Developer Mode or symlink privilege");
+                return;
+            }
+            panic!("cannot create test symlink: {error}");
+        }
+        symlink(&image, &other_named_link).unwrap();
+        let roots = roots_with(dir.path());
         assert_eq!(
-            mime_from_extension(Path::new("a.unknown")),
-            "application/octet-stream"
+            read_image_data_url_inner(&roots, &image_named_link.to_string_lossy()).unwrap_err(),
+            readers::UNSUPPORTED_IMAGE_FORMAT
+        );
+        assert_eq!(
+            read_image_data_url_inner(&roots, &other_named_link.to_string_lossy()).unwrap(),
+            "data:image/png;base64,iVBORw=="
+        );
+    }
+
+    #[test]
+    fn image_mime_type_detects_common_image_types() {
+        assert_eq!(image_mime_type(Path::new("a.PNG")), Some("image/png"));
+        assert_eq!(image_mime_type(Path::new("a.jpg")), Some("image/jpeg"));
+        assert_eq!(image_mime_type(Path::new("a.svg")), Some("image/svg+xml"));
+        assert_eq!(image_mime_type(Path::new("a.unknown")), None);
+        assert_eq!(image_mime_type(Path::new("a")), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_image_format_excludes_named_streams() {
+        assert_eq!(
+            readers::native_image_mime_type(Path::new(r"C:\fixtures\image.PNG")),
+            Some("image/png")
+        );
+        assert_eq!(
+            readers::native_image_mime_type(Path::new(r"C:\fixtures\notes.txt:preview.PNG")),
+            None
         );
     }
 

@@ -4,6 +4,7 @@ use crate::commands::has_markdown_extension;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use ignore::WalkBuilder;
 use serde::Serialize;
+use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use tauri::State;
@@ -12,6 +13,7 @@ const MAX_CUSTOM_CSS_BYTES: u64 = 1024 * 1024;
 pub(crate) const MAX_MARKDOWN_BYTES: u64 = 10 * 1024 * 1024;
 pub(super) const LARGE_MARKDOWN_WARNING_BYTES: u64 = 5 * 1024 * 1024;
 pub(crate) const MAX_IMAGE_BYTES: u64 = 20 * 1024 * 1024;
+pub(crate) const UNSUPPORTED_IMAGE_FORMAT: &str = "対応していない画像形式です";
 const MAX_DIRECTORY_ENTRIES: usize = 10_000;
 
 #[derive(Debug, Serialize, Clone)]
@@ -145,14 +147,9 @@ pub(super) fn read_custom_css_inner(state: &AllowedRoots, path: &str) -> Result<
     Ok(raw)
 }
 
-pub(crate) fn mime_from_extension(path: &Path) -> &'static str {
-    match path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("")
-        .to_lowercase()
-        .as_str()
-    {
+pub(crate) fn image_mime_type(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    Some(match extension.as_str() {
         "png" => "image/png",
         "jpg" | "jpeg" => "image/jpeg",
         "gif" => "image/gif",
@@ -160,14 +157,35 @@ pub(crate) fn mime_from_extension(path: &Path) -> &'static str {
         "webp" => "image/webp",
         "bmp" => "image/bmp",
         "ico" => "image/x-icon",
-        _ => "application/octet-stream",
+        _ => return None,
+    })
+}
+
+pub(crate) fn native_image_mime_type(path: &Path) -> Option<&'static str> {
+    // Exclude Windows named streams before inspecting the image extension.
+    #[cfg(windows)]
+    if path.file_name()?.as_encoded_bytes().contains(&b':') {
+        return None;
     }
+    image_mime_type(path)
 }
 
 /// 信頼済みルート配下にあることを検証した上で画像をbase64データURLとして返す
 #[tauri::command(async)]
 pub fn read_image_data_url(path: String, state: State<'_, AllowedRoots>) -> Result<String, String> {
-    let (file, canonical) = open_allowed_file(&state, &path)?;
+    read_image_data_url_inner(&state, &path)
+}
+
+pub(super) fn read_image_data_url_inner(
+    state: &AllowedRoots,
+    path: &str,
+) -> Result<String, String> {
+    let (file, final_path) = open_allowed_file(state, path)?;
+    read_opened_image(file, &final_path)
+}
+
+pub(crate) fn read_opened_image(file: File, final_path: &Path) -> Result<String, String> {
+    let mime = native_image_mime_type(final_path).ok_or(UNSUPPORTED_IMAGE_FORMAT)?;
     if file
         .metadata()
         .map_err(|e| format!("画像ファイル情報の取得に失敗しました: {}", e))?
@@ -183,8 +201,7 @@ pub fn read_image_data_url(path: String, state: State<'_, AllowedRoots>) -> Resu
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
         return Err("画像ファイルは20MiB以下にしてください".to_string());
     }
-    let mime = mime_from_extension(&canonical);
-    Ok(format!("data:{};base64,{}", mime, STANDARD.encode(bytes)))
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
 }
 
 /// ディレクトリ直下1階層のFileEntryを返す（信頼済みルート配下に限る）。
