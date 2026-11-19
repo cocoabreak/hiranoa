@@ -1,47 +1,18 @@
 import { addMermaidExpandButton } from "$lib/markdown/image-lightbox-trigger";
 import type { Locale } from "$lib/i18n/index.svelte";
-import { protectExternalImages } from "$lib/markdown/external-images";
+import { EXTERNAL_IMAGES_BLOCKED_EVENT } from "$lib/markdown/external-images";
 
 // プラグイン自己完結の実行時文言（コアの辞書には載せない）
-const MESSAGES: Record<Locale, { renderFailed: string }> = {
-  ja: { renderFailed: "⚠ Mermaid レンダリング失敗（クリックでコードを表示）" },
-  en: { renderFailed: "⚠ Mermaid rendering failed (click to show code)" },
-};
-
-let initialized = false;
-let mermaidModule: typeof import("mermaid").default | null = null;
-
-async function getMermaid() {
-  if (!mermaidModule) {
-    mermaidModule = (await import("mermaid")).default;
-  }
-  if (!initialized) {
-    // securityLevelは既定の"strict"を明示する。"loose"はHTMLラベルやclickディレクティブを
-    // 素通しするため、悪意あるMarkdown内のMermaidブロック経由でHTML注入が可能になる。
-    // strictではMermaid内部のDOMPurifyがラベルを無害化する。
-    mermaidModule.initialize({
-      startOnLoad: false,
-      theme: "default",
-      securityLevel: "strict",
-      secure: [
-        "secure",
-        "securityLevel",
-        "startOnLoad",
-        "maxTextSize",
-        "maxEdges",
-        "suppressErrorRendering",
-        "themeCSS",
-        "themeVariables",
-        "fontFamily",
-      ],
-      // 構文エラー時はアプリ側でエラーUIを表示する。Mermaid既定のエラーSVGは
-      // document.body直下の一時要素に描画され、例外経路で残ることがあるため抑止する。
-      suppressErrorRendering: true,
-    });
-    initialized = true;
-  }
-  return mermaidModule;
-}
+const MESSAGES = {
+  ja: {
+    renderFailed: "⚠ Mermaid レンダリング失敗（クリックでコードを表示）",
+    resourcesBlocked: "外部リソースを制限しているため、Mermaid 図を表示できません。",
+  },
+  en: {
+    renderFailed: "⚠ Mermaid rendering failed (click to show code)",
+    resourcesBlocked: "This Mermaid diagram is hidden while external resources are restricted.",
+  },
+} satisfies Record<Locale, { renderFailed: string; resourcesBlocked: string }>;
 
 const RENDER_TIMEOUT_MS = 8000;
 const MAX_PRINT_DIAGRAMS = 100;
@@ -65,42 +36,56 @@ async function renderOne(
 
   el.classList.replace("mermaid-pending", "mermaid-processing");
 
-  let renderId: string | undefined;
+  const renderId = `mermaid-${crypto.randomUUID()}`;
+  const restricted = !externalImagesAllowed || blockLocalResources;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const blockDiagram = () => {
+    if (blockLocalResources)
+      throw new Error("Resource references are not supported in history diagrams");
+    el.classList.replace("mermaid-processing", "mermaid-blocked");
+    el.textContent = MESSAGES[locale].resourcesBlocked;
+    if (onExternalImagesBlocked) onExternalImagesBlocked(1);
+    else
+      el.dispatchEvent(
+        new CustomEvent(EXTERNAL_IMAGES_BLOCKED_EVENT, { detail: 1, bubbles: true })
+      );
+  };
   try {
-    if (blockLocalResources) {
-      const { assertHistoryDiagramResources } = await import("./history-resources");
-      assertHistoryDiagramResources(code);
-    }
-    const mermaid = await getMermaid();
+    const resources = restricted ? await import("./resources") : null;
     if (!isCurrent()) return;
-    renderId = `mermaid-${crypto.randomUUID()}`;
-
-    // 孤立した一時要素をクリーンアップ
-    document.getElementById(renderId)?.remove();
+    const hasResources = blockLocalResources
+      ? resources?.hasDiagramResources(code)
+      : resources?.hasExternalImageNode(code);
+    if (hasResources) {
+      blockDiagram();
+      return;
+    }
+    const render = restricted
+      ? await (await import("./restricted")).getRestrictedRenderer()
+      : (await import("./renderer")).renderMermaid;
+    if (!isCurrent()) return;
 
     // タイムアウト付きで描画（hangするダイアグラムへの対策）
-    const { svg } = await Promise.race([
-      mermaid.render(renderId, code),
-      new Promise<never>((_, reject) =>
-        setTimeout(
+    const svg = await Promise.race([
+      render(renderId, code),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(
           () => reject(new Error(`Mermaid render timed out (${RENDER_TIMEOUT_MS}ms)`)),
           RENDER_TIMEOUT_MS
-        )
-      ),
+        );
+      }),
     ]);
 
     if (!isCurrent()) return;
-    const protectedResult = externalImagesAllowed
-      ? { html: svg, blockedCount: 0 }
-      : protectExternalImages(svg, blockLocalResources);
+    if (resources?.hasSvgResources(svg)) {
+      blockDiagram();
+      return;
+    }
     const scope = viewRoot?.dataset.viewScope;
     const svgTools = scope ? await import("$lib/markdown/view-svg") : null;
     if (!isCurrent()) return;
-    el.innerHTML = protectedResult.html;
+    el.innerHTML = svg;
     if (svgTools && scope) svgTools.namespaceGeneratedSvg(el, `view-${scope}`, viewRoot);
-    if (protectedResult.blockedCount > 0) {
-      onExternalImagesBlocked?.(protectedResult.blockedCount);
-    }
     el.classList.replace("mermaid-processing", "mermaid-rendered");
     addMermaidExpandButton(el);
   } catch (e) {
@@ -118,7 +103,8 @@ async function renderOne(
     el.querySelector("pre")!.textContent = rawCode;
     el.classList.replace("mermaid-processing", "mermaid-error-container");
   } finally {
-    if (renderId) {
+    clearTimeout(timeout);
+    if (!restricted) {
       // Mermaidは描画用に d${id}（strict）または i${id}（sandbox）を
       // document.body直下へ作る。構文エラーやタイムアウトでもレイアウトへ漏らさない。
       // ${id} 自体は成功時に返されるSVGのIDなので、ここでは削除しない。

@@ -1,3 +1,5 @@
+export const EXTERNAL_IMAGES_BLOCKED_EVENT = "hiranoa:external-images-blocked";
+
 export type ExternalImageProtectionResult = {
   html: string;
   blockedCount: number;

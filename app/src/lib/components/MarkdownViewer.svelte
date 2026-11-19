@@ -50,7 +50,10 @@
   import MetadataSummary from "./MetadataSummary.svelte";
   import { documentAnchorStore as shareddocumentAnchorStore } from "$lib/stores/document-anchor.svelte";
   import { i18n } from "$lib/i18n/index.svelte";
-  import { protectExternalImages } from "$lib/markdown/external-images";
+  import {
+    EXTERNAL_IMAGES_BLOCKED_EVENT,
+    protectExternalImages,
+  } from "$lib/markdown/external-images";
   import {
     subscribeExternalImageApprovals,
     approveExternalImagesForDocument,
@@ -81,8 +84,17 @@
   const cancelMarkdownRender = renderSession.cancel;
   let contentEl: HTMLElement;
   $effect(() => {
-    workspaceStore.setRoot(paneId, contentEl);
-    return () => workspaceStore.setRoot(paneId, undefined);
+    const root = contentEl;
+    workspaceStore.setRoot(paneId, root);
+    if (!root) return;
+    const onImagesBlocked = (event: Event) => {
+      externalImageCount += (event as CustomEvent<number>).detail;
+    };
+    root.addEventListener(EXTERNAL_IMAGES_BLOCKED_EVENT, onImagesBlocked);
+    return () => {
+      root.removeEventListener(EXTERNAL_IMAGES_BLOCKED_EVENT, onImagesBlocked);
+      workspaceStore.setRoot(paneId, undefined);
+    };
   });
   let renderedHtml = $state("");
   let renderError = $state<string | null>(null);

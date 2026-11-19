@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { EXTERNAL_IMAGES_BLOCKED_EVENT } from "$lib/markdown/external-images";
 import { renderAllPending, setupLazyMermaid } from "./post";
 
 const { initializeMock, renderMock } = vi.hoisted(() => ({
@@ -11,6 +12,9 @@ vi.mock("mermaid", () => ({
     initialize: initializeMock,
     render: renderMock,
   },
+}));
+vi.mock("./restricted", async () => ({
+  getRestrictedRenderer: async () => (await import("./renderer")).renderMermaid,
 }));
 
 describe("Mermaid post renderer", () => {
@@ -91,6 +95,38 @@ describe("Mermaid post renderer", () => {
     await renderAllPending(container, "en", false, undefined, true);
     expect(renderMock).not.toHaveBeenCalled();
     expect(diagram).toHaveClass("mermaid-error-container");
+  });
+
+  it("未許可の外部画像付きの図を保留して文書単位の許可を促す", async () => {
+    const container = document.createElement("main");
+    const diagram = document.createElement("div");
+    diagram.className = "mermaid-pending";
+    diagram.dataset.code = encodeURIComponent(
+      'flowchart TD\n  A@{ img: "https://example.invalid/picture.png" }'
+    );
+    container.append(diagram);
+    const onBlocked = vi.fn();
+
+    await renderAllPending(container, "en", false, onBlocked);
+
+    expect(renderMock).not.toHaveBeenCalled();
+    expect(diagram).toHaveClass("mermaid-blocked");
+    expect(onBlocked).toHaveBeenCalledWith(1);
+  });
+
+  it("印刷で保留した図をプレビューへ通知する", async () => {
+    const container = document.createElement("main");
+    const diagram = document.createElement("div");
+    diagram.className = "mermaid-pending";
+    diagram.dataset.code = encodeURIComponent(
+      'flowchart LR\nA@{ img: "https://example.invalid/picture.png" }'
+    );
+    container.append(diagram);
+    const blocked = vi.fn();
+    container.addEventListener(EXTERNAL_IMAGES_BLOCKED_EVENT, blocked);
+    await renderAllPending(container, "en");
+    expect(diagram).toHaveClass("mermaid-blocked");
+    expect(blocked).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ detail: 1 }));
   });
 
   it("位置復元等で購読を作り直しても処理中の図を再試行し、旧結果で上書きしない", async () => {
