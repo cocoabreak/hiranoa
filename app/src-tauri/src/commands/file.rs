@@ -4,6 +4,7 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 
 pub(crate) mod dialogs;
+pub(crate) mod directory_scan;
 pub(crate) mod external_editor;
 pub(crate) mod ignore_rules;
 mod persistent_trust;

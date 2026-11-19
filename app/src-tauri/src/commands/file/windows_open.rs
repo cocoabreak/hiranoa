@@ -210,21 +210,52 @@ pub(super) fn open(path: &Path, read_contents: bool) -> io::Result<File> {
 
 /// Opens scan metadata without following filesystem links, including intermediate links.
 pub(super) fn open_direct(path: &Path, allow_share: bool) -> io::Result<File> {
+    open_direct_with(path, allow_share, GENERIC_READ, 0)
+}
+
+pub(super) fn open_scan_directory(path: &Path, list_entries: bool) -> io::Result<File> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
+
+    let access = FILE_READ_ATTRIBUTES | if list_entries { FILE_LIST_DIRECTORY } else { 0 };
+    open_direct_with(path, true, access, FILE_DIRECTORY_FILE)
+}
+
+fn open_direct_with(path: &Path, allow_share: bool, access: u32, options: u32) -> io::Result<File> {
     let path = OpenPath::parse(path, allow_share)?;
-    let access = GENERIC_READ;
     match &path.local_device {
         Some(device) => open_native(
             None,
             &path.native_name(device, path.components.len()),
             access,
-            0,
+            options,
         )
         .map_err(status_error),
-        None => path.open_share(access, 0),
+        None => path.open_share(access, options),
     }
 }
 
-fn status_error(status: NTSTATUS) -> io::Error {
+/// Opens below an existing directory handle without following reparse points.
+pub(super) fn open_relative_direct(
+    directory: &File,
+    relative: &Path,
+    directory_only: bool,
+) -> io::Result<File> {
+    use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
+    use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
+
+    let (access, options) = if directory_only {
+        (
+            FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
+            FILE_DIRECTORY_FILE,
+        )
+    } else {
+        (GENERIC_READ, 0)
+    };
+    open_native(Some(directory), relative.as_os_str(), access, options).map_err(status_error)
+}
+
+pub(super) fn status_error(status: NTSTATUS) -> io::Error {
     // SAFETY: This API translates the status value without dereferencing pointers.
     io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)
 }

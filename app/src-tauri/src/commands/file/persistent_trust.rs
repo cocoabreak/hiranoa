@@ -14,7 +14,7 @@ const APPROVAL_VERSION: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
-enum DirectoryIdentity {
+pub(super) enum DirectoryIdentity {
     #[cfg(windows)]
     Windows {
         volume: u64,
@@ -86,7 +86,7 @@ fn open_folder(_path: &Path) -> std::io::Result<File> {
 }
 
 #[cfg(windows)]
-fn directory_identity(handle: &File, metadata: &Metadata) -> Option<DirectoryIdentity> {
+pub(super) fn directory_identity(handle: &File, metadata: &Metadata) -> Option<DirectoryIdentity> {
     use std::os::windows::{fs::MetadataExt, io::AsRawHandle};
     use windows_sys::Win32::Storage::FileSystem::{
         FileIdInfo, GetFileInformationByHandleEx, FILE_ID_INFO,
@@ -115,7 +115,7 @@ fn directory_identity(handle: &File, metadata: &Metadata) -> Option<DirectoryIde
 }
 
 #[cfg(unix)]
-fn directory_identity(_handle: &File, metadata: &Metadata) -> Option<DirectoryIdentity> {
+pub(super) fn directory_identity(_handle: &File, metadata: &Metadata) -> Option<DirectoryIdentity> {
     use std::os::unix::fs::MetadataExt;
 
     // Inodes can be reused after deletion. Without a creation time, keep the

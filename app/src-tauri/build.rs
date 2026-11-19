@@ -53,7 +53,6 @@ fn main() {
             "get_shell_integration_status",
             "set_shell_integration_enabled",
             "search_in_directory",
-            "resolve_wiki_links",
             "register_native_source",
             "register_native_document_source",
             "register_zip_source",

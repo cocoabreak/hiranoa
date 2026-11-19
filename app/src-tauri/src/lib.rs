@@ -146,7 +146,6 @@ pub fn run() {
             commands::shell_integration::get_shell_integration_status,
             commands::shell_integration::set_shell_integration_enabled,
             commands::search::search_in_directory,
-            commands::wiki::resolve_wiki_links,
             commands::sources::register_native_source,
             commands::sources::register_native_document_source,
             commands::sources::register_zip_source,

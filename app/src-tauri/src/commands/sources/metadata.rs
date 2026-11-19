@@ -386,9 +386,7 @@ mod tests {
         }
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
         let catalog = collect_metadata(&backend, "native", 0, false, false, &roots).unwrap();
         assert_eq!(catalog.documents.len(), MAX_DOCUMENTS);
         assert!(catalog.truncated);
@@ -401,9 +399,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let native = NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        };
+        let native = NativeSource::from_fixture(directory.path(), &roots);
         std::fs::write(directory.path().join("note.md"), "# Note").unwrap();
         let backend = SourceBackend::Native(native);
         assert_eq!(

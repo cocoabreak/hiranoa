@@ -1,4 +1,4 @@
-use crate::commands::file::ignore_rules::walk_entries;
+use crate::commands::file::directory_scan::{RegisteredDirectory, SubdirectoryErrors};
 use crate::commands::file::readers::{
     native_image_mime_type, read_opened_image, UNSUPPORTED_IMAGE_FORMAT,
 };
@@ -69,6 +69,37 @@ pub struct SourceEntry {
 #[derive(Clone, Debug)]
 pub struct NativeSource {
     root: PathBuf,
+    directory: Option<RegisteredDirectory>,
+}
+
+impl NativeSource {
+    fn new(root: PathBuf, roots: &AllowedRoots) -> Self {
+        // Opening a known file is independent of permission to identify and
+        // enumerate its parent. An unavailable identity disables scans only.
+        let directory = RegisteredDirectory::capture(&root, roots).ok();
+        Self { root, directory }
+    }
+
+    fn scan_directory(&self) -> Result<&RegisteredDirectory, String> {
+        self.directory
+            .as_ref()
+            .ok_or_else(|| "文書ソースのフォルダーを識別できません".into())
+    }
+
+    fn same_registration(&self, other: &Self) -> bool {
+        self.root == other.root
+            && match (&self.directory, &other.directory) {
+                (Some(existing), Some(opened)) => existing.same_as(opened),
+                (None, None) => true,
+                _ => false,
+            }
+    }
+
+    #[cfg(test)]
+    fn from_fixture(path: &Path, roots: &AllowedRoots) -> Self {
+        let root = roots.resolve(&path.to_string_lossy()).unwrap();
+        Self::new(root, roots)
+    }
 }
 
 const MAX_ARCHIVE_BYTES: u64 = 1024 * 1024 * 1024;
@@ -479,19 +510,25 @@ impl SourceRegistry {
         Self::default()
     }
 
-    fn register_native(&self, root: PathBuf) -> Result<DocumentSourceInfo, String> {
+    fn register_native(
+        &self,
+        root: PathBuf,
+        roots: &AllowedRoots,
+    ) -> Result<DocumentSourceInfo, String> {
+        let source = NativeSource::new(root, roots);
         let mut registry = self
             .0
             .lock()
             .map_err(|_| "ドキュメントソースのロックに失敗しました".to_string())?;
         if let Some((id, record)) = registry.sources.iter().find(|(_, record)| {
-            matches!(record.backend.as_ref(), SourceBackend::Native(source) if source.root == root)
+            matches!(record.backend.as_ref(), SourceBackend::Native(existing)
+                if existing.same_registration(&source))
         }) {
             return Ok(source_info(id, &record.backend, record.generation));
         }
         registry.next_id += 1;
         let id = format!("source-{}", registry.next_id);
-        let backend = Arc::new(SourceBackend::Native(NativeSource { root }));
+        let backend = Arc::new(SourceBackend::Native(source));
         let info = source_info(&id, &backend, 0);
         registry.sources.insert(
             id,
@@ -1347,7 +1384,7 @@ pub fn register_native_source(
         .inspect_allowed_path(&root_path)?
         .filter(|(_, metadata)| metadata.is_dir())
         .ok_or_else(|| "フォルダーを指定してください".to_string())?;
-    registry.register_native(root)
+    registry.register_native(root, &roots)
 }
 
 #[tauri::command(async)]
@@ -1364,7 +1401,7 @@ pub fn register_native_document_source(
         .parent()
         .ok_or_else(|| "親フォルダーを特定できません".to_string())?
         .to_path_buf();
-    let info = registry.register_native(root)?;
+    let info = registry.register_native(root, &roots)?;
     let entry = file
         .file_name()
         .ok_or_else(|| "ファイル名を特定できません".to_string())?
@@ -1754,35 +1791,19 @@ fn collect_source_markdown_paths_with_status(
 ) -> Result<(Vec<String>, bool), String> {
     match backend {
         SourceBackend::Native(source) => {
-            let walk = walk_entries(
-                &source.root,
-                roots,
-                show_hidden_files,
-                respect_gitignore,
-                None,
-            );
-            let mut paths = Vec::new();
-            let mut truncated = false;
-            for (index, entry) in walk.enumerate() {
-                if index >= entry_limit {
-                    truncated = true;
-                    break;
-                }
-                let entry =
-                    entry.map_err(|error| format!("Markdown一覧の走査に失敗しました: {error}"))?;
-                let path = entry.path();
-                if !crate::commands::has_markdown_extension(path)
-                    || !roots
-                        .inspect_allowed_path(&path.to_string_lossy())
-                        .is_ok_and(|result| result.is_some_and(|(_, metadata)| metadata.is_file()))
-                {
-                    continue;
-                }
-                let Some(relative) = path.strip_prefix(&source.root).ok() else {
-                    continue;
-                };
-                paths.push(relative.to_string_lossy().replace('\\', "/"));
-            }
+            let (paths, truncated) = source
+                .scan_directory()?
+                .open_verified(&source.root, roots)?
+                .markdown_paths(
+                    show_hidden_files,
+                    respect_gitignore,
+                    entry_limit,
+                    SubdirectoryErrors::Report,
+                )?;
+            let paths = paths
+                .into_iter()
+                .map(|path| path.to_string_lossy().replace('\\', "/"))
+                .collect();
             Ok((paths, truncated))
         }
         SourceBackend::Zip(source) => Ok((
@@ -3350,21 +3371,12 @@ pub fn resolve_source_wiki_links(
     let targets = super::wiki::validate_targets(targets)?;
     let backend = registry.get(&document.source_id)?;
     let files = match backend.as_ref() {
-        SourceBackend::Native(source) => {
-            let root = normalize_path_for_frontend(&source.root)
-                .trim_end_matches('/')
-                .to_string();
-            indexes
-                .get_or_build(&source.root, respect_gitignore, &roots)?
-                .into_iter()
-                .filter_map(|path| {
-                    Path::new(&path)
-                        .strip_prefix(Path::new(&root))
-                        .ok()
-                        .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-                })
-                .collect()
-        }
+        SourceBackend::Native(source) => indexes.get_or_build(
+            &source.root,
+            source.scan_directory()?,
+            respect_gitignore,
+            &roots,
+        )?,
         SourceBackend::Zip(_) => collect_source_markdown_paths(&backend, true, false, &roots)?,
     };
     let current_dir = super::wiki::parent_components_lower(&document.path);
@@ -3408,12 +3420,71 @@ mod tests {
     #[test]
     fn registry_reuses_native_root_and_rejects_unknown_ids() {
         let registry = SourceRegistry::new();
-        let root = tempfile::tempdir().unwrap().path().to_path_buf();
-        let first = registry.register_native(root.clone()).unwrap();
-        let second = registry.register_native(root).unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&temp.path().to_string_lossy()).unwrap();
+        let root = roots.resolve(&temp.path().to_string_lossy()).unwrap();
+        let first = registry.register_native(root.clone(), &roots).unwrap();
+        let second = registry.register_native(root, &roots).unwrap();
         assert_eq!(first.id, second.id);
         assert_eq!(registry.get(&first.id).unwrap().kind(), "native");
         assert!(registry.get("unknown").is_err());
+    }
+
+    #[test]
+    fn missing_directory_identity_disables_scans_without_disabling_known_files() {
+        let folder = tempfile::tempdir().unwrap();
+        std::fs::write(folder.path().join("note.md"), "# Known document").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&folder.path().to_string_lossy()).unwrap();
+        let source = NativeSource {
+            root: roots.resolve(&folder.path().to_string_lossy()).unwrap(),
+            directory: None,
+        };
+        assert!(open_native_source_file(&source, "note.md", &roots).is_ok());
+        let backend = SourceBackend::Native(source);
+        assert!(source_markdown_documents(&backend, "no-identity", true, true, &roots).is_err());
+    }
+
+    #[test]
+    fn a_replaced_root_invalidates_the_existing_source_and_warm_wiki_index() {
+        let temp = tempfile::tempdir().unwrap();
+        let location = temp.path().join("notes");
+        std::fs::create_dir(&location).unwrap();
+        std::fs::write(location.join("original.md"), "# Original").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(&location.to_string_lossy()).unwrap();
+        let root = roots.resolve(&location.to_string_lossy()).unwrap();
+        let registry = SourceRegistry::new();
+        let info = registry.register_native(root.clone(), &roots).unwrap();
+        let backend = registry.get(&info.id).unwrap();
+        let SourceBackend::Native(source) = backend.as_ref() else {
+            panic!("expected a native source")
+        };
+        let index = super::super::wiki::WikiIndexState::new();
+        let initial = index
+            .get_or_build(&root, source.scan_directory().unwrap(), false, &roots)
+            .unwrap();
+        assert_eq!(initial, ["original.md"]);
+
+        std::fs::rename(&location, temp.path().join("previous")).unwrap();
+        std::fs::create_dir(&location).unwrap();
+        std::fs::write(location.join("replacement.md"), "# Replacement").unwrap();
+        assert!(source_markdown_documents(&backend, &info.id, true, false, &roots).is_err());
+        assert!(index
+            .get_or_build(&root, source.scan_directory().unwrap(), false, &roots)
+            .is_err());
+
+        let new_info = registry.register_native(root.clone(), &roots).unwrap();
+        assert_ne!(new_info.id, info.id);
+        let new_backend = registry.get(&new_info.id).unwrap();
+        let SourceBackend::Native(new_source) = new_backend.as_ref() else {
+            panic!("expected a native source")
+        };
+        let refreshed = index
+            .get_or_build(&root, new_source.scan_directory().unwrap(), false, &roots)
+            .unwrap();
+        assert_eq!(refreshed, ["replacement.md"]);
     }
 
     #[test]
@@ -3423,9 +3494,7 @@ mod tests {
         std::fs::write(directory.path().join("README.md"), "# Native").unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let source = NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        };
+        let source = NativeSource::from_fixture(directory.path(), &roots);
         let root = DocumentRef {
             source_id: "native-test".to_string(),
             path: String::new(),
@@ -3487,9 +3556,7 @@ mod tests {
         .unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let source = NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        };
+        let source = NativeSource::from_fixture(directory.path(), &roots);
         let current = DocumentRef {
             source_id: "source-a".to_string(),
             path: "current.md".to_string(),
@@ -3661,9 +3728,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
         let paths = HashSet::from([
             "guide/current.md".to_string(),
             "target.md".to_string(),
@@ -3956,9 +4021,7 @@ mod tests {
             std::fs::write(root.join("note.md"), "# Note").unwrap();
             roots.register(&root.to_string_lossy()).unwrap();
         }
-        let source = NativeSource {
-            root: roots.resolve(&first.to_string_lossy()).unwrap(),
-        };
+        let source = NativeSource::from_fixture(&first, &roots);
         assert!(open_native_source_file(&source, "note.md", &roots).is_ok());
         let outside = second.join("note.md");
         let outside_handle = open_allowed_file(&roots, &outside.to_string_lossy()).unwrap();
@@ -3978,9 +4041,7 @@ mod tests {
         std::fs::write(directory.path().join("invalid.md"), [0xff]).unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         assert_eq!(
             read_source_text_with_limit(&backend, "invalid.md", &roots, None, 0).unwrap(),
@@ -4003,7 +4064,10 @@ mod tests {
         roots.register(&directory.path().to_string_lossy()).unwrap();
         let registry = SourceRegistry::new();
         let info = registry
-            .register_native(roots.resolve(&directory.path().to_string_lossy()).unwrap())
+            .register_native(
+                roots.resolve(&directory.path().to_string_lossy()).unwrap(),
+                &roots,
+            )
             .unwrap();
         let document = DocumentRef {
             source_id: info.id,
@@ -4078,7 +4142,10 @@ mod tests {
         roots.register(&directory.path().to_string_lossy()).unwrap();
         let registry = SourceRegistry::new();
         let info = registry
-            .register_native(roots.resolve(&directory.path().to_string_lossy()).unwrap())
+            .register_native(
+                roots.resolve(&directory.path().to_string_lossy()).unwrap(),
+                &roots,
+            )
             .unwrap();
 
         let response = build_reference_validation(
@@ -4137,7 +4204,10 @@ mod tests {
         roots.register(&directory.path().to_string_lossy()).unwrap();
         let registry = SourceRegistry::new();
         let info = registry
-            .register_native(roots.resolve(&directory.path().to_string_lossy()).unwrap())
+            .register_native(
+                roots.resolve(&directory.path().to_string_lossy()).unwrap(),
+                &roots,
+            )
             .unwrap();
 
         let response = build_reference_validation(
@@ -4222,7 +4292,10 @@ mod tests {
         roots.register(&directory.path().to_string_lossy()).unwrap();
         let registry = SourceRegistry::new();
         let info = registry
-            .register_native(roots.resolve(&directory.path().to_string_lossy()).unwrap())
+            .register_native(
+                roots.resolve(&directory.path().to_string_lossy()).unwrap(),
+                &roots,
+            )
             .unwrap();
 
         let response = build_reference_validation(
@@ -4263,9 +4336,7 @@ mod tests {
         std::fs::write(directory.path().join("hidden-ref.md"), "[[.hidden/target]]").unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         let index = build_link_index(&backend, false, false, true, &roots).unwrap();
         let root_edges = &index.incoming_by_target["target.md"];
@@ -4294,9 +4365,7 @@ mod tests {
         .unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         let index = build_link_index(&backend, true, false, true, &roots).unwrap();
         let outgoing = &index.outgoing_by_source["guide/current.md"];
@@ -4337,9 +4406,7 @@ mod tests {
         std::fs::write(directory.path().join("current.md"), markdown).unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         let index = build_link_index(&backend, true, false, true, &roots).unwrap();
         let broken_ids = &index.broken_by_source["current.md"];
@@ -4375,9 +4442,7 @@ mod tests {
         std::fs::write(directory.path().join("current.md"), markdown).unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         let index = build_link_index(&backend, true, false, true, &roots).unwrap();
         let broken_ids = &index.broken_by_source["current.md"];
@@ -4405,9 +4470,7 @@ mod tests {
         std::fs::write(directory.path().join("one.md"), "# One").unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
 
         let (_, truncated) =
             collect_source_markdown_paths_with_status(&backend, true, false, &roots, 1).unwrap();
@@ -4497,9 +4560,7 @@ mod tests {
         }
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let native = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let native = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
         let archive = directory.path().join("docs.zip");
         create_zip(&archive, entries);
         let zip = SourceBackend::Zip(
@@ -4571,7 +4632,9 @@ mod tests {
             }
             let registry = SourceRegistry::new();
             let source = match backend {
-                SourceBackend::Native(source) => registry.register_native(source.root).unwrap(),
+                SourceBackend::Native(source) => {
+                    registry.register_native(source.root, &roots).unwrap()
+                }
                 SourceBackend::Zip(source) => registry.register_zip(source).unwrap(),
             };
             let validation = build_reference_validation(
@@ -4617,9 +4680,7 @@ mod tests {
         symlink(&supported, directory.path().join("pixel.link")).unwrap();
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
         assert_eq!(
             validate_image_reference(&backend, "guide.md", "notes.png", &roots),
             Some(ReferenceProblemStatus::Unverifiable)
@@ -4652,9 +4713,7 @@ mod tests {
         let roots = AllowedRoots::new();
         roots.register(&directory.path().to_string_lossy()).unwrap();
         roots.register(&outside.path().to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&directory.path().to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(directory.path(), &roots));
         assert!(resolve_directory_index(&backend, "escape", &roots).is_err());
         assert!(read_resolved_link_preview(
             &backend,
@@ -4876,14 +4935,12 @@ mod tests {
         let root = directory.path().to_path_buf();
         let roots = AllowedRoots::new();
         roots.register(&root.to_string_lossy()).unwrap();
-        let backend = SourceBackend::Native(NativeSource {
-            root: roots.resolve(&root.to_string_lossy()).unwrap(),
-        });
+        let backend = SourceBackend::Native(NativeSource::from_fixture(&root, &roots));
         directory.close().unwrap();
 
         let error = source_markdown_documents(&backend, "deleted", true, false, &roots)
             .expect_err("削除済みルートの走査は失敗として報告する必要がある");
-        assert!(error.contains("Markdown一覧の走査に失敗しました"));
+        assert!(error.contains("文書ソースのフォルダーが変更されました"));
     }
 
     #[test]
