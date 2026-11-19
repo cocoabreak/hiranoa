@@ -45,6 +45,7 @@ pub fn run() {
     builder
         .setup(|app| {
             let _ = app.manage(WatcherWorker::new(app.handle().clone()));
+            commands::git_history::cleanup_history_cache(app.handle());
             if let Err(error) = commands::local_fonts::cleanup_local_font_candidates(app.handle()) {
                 eprintln!("failed to clean up local font candidates: {error}");
             }

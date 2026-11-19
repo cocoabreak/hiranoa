@@ -1,4 +1,5 @@
-use super::{DirectoryEntry, DirectoryHandle, EntryKind};
+use super::{ChildAccess, DirectoryEntry, DirectoryHandle, EntryKind};
+use crate::commands::file::trusted_paths::unix_traversal_flags;
 use std::ffi::{CStr, CString, OsString};
 use std::fs::File;
 use std::io;
@@ -10,16 +11,24 @@ use std::ptr::NonNull;
 pub(super) fn open_relative_direct(
     directory: DirectoryHandle<'_>,
     relative: &Path,
-    directory_only: bool,
+    access: ChildAccess,
 ) -> io::Result<File> {
     let mut parts = relative.components().peekable();
     let mut current = None::<File>;
     while let Some(Component::Normal(part)) = parts.next() {
         let name = CString::new(part.as_bytes())?;
-        let mut flags = libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
-        if directory_only || parts.peek().is_some() {
-            flags |= libc::O_DIRECTORY;
-        }
+        let mode = if parts.peek().is_some() {
+            ChildAccess::Traverse
+        } else {
+            access
+        };
+        let flags = match mode {
+            ChildAccess::Read => libc::O_RDONLY,
+            ChildAccess::Traverse => unix_traversal_flags(),
+            ChildAccess::List => libc::O_RDONLY | libc::O_DIRECTORY,
+        } | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC
+            | libc::O_NONBLOCK;
         let parent = current.as_ref().map_or(directory, File::as_fd);
         // SAFETY: parent owns a live descriptor and name is NUL-terminated.
         let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), flags) };
