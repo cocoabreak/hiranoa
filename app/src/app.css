@@ -93,6 +93,13 @@
   }
 }
 
+@media screen {
+  /* 本文を固定位置指定の基準にし、描画をアプリの操作 UI から分離する。 */
+  .document-content {
+    contain: paint;
+  }
+}
+
 /* 印刷（PDF出力）用スタイル。UI要素の非表示は各コンポーネントの print:hidden が担い、
    ここではレイアウトの解除と改ページ制御を行う */
 @media print {

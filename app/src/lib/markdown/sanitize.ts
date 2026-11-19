@@ -1,5 +1,14 @@
 import DOMPurify from "dompurify";
 
+// Top-layer elements are painted outside their ancestors' containment boundary.
+export const DOCUMENT_TOP_LAYER_ATTRIBUTES = [
+  "popover",
+  "popovertarget",
+  "popovertargetaction",
+  "command",
+  "commandfor",
+];
+
 /**
  * markdown-it の `html: true` により素通しされる生HTML（<script> 等）を無害化する。
  * KaTeXは根号などの一部グリフをインラインSVGで出力するため svg プロファイルも必須。
@@ -19,6 +28,6 @@ export function sanitizeHtml(html: string): string {
     // 迂回しうる。Markdown本文で正当な用途もないため禁止する。
     FORBID_TAGS: ["form", "style"],
     // 表やセルの旧式の背景画像属性からもブラウザーが画像を取得する。
-    FORBID_ATTR: ["background"],
+    FORBID_ATTR: ["background", ...DOCUMENT_TOP_LAYER_ATTRIBUTES],
   });
 }

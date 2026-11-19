@@ -25,10 +25,13 @@ describe("Mermaid post renderer", () => {
   });
 
   it("正常な図をSVGとして残し、一時DOMだけを削除する", async () => {
-    renderMock.mockImplementation(async (id: string) => {
+    renderMock.mockImplementation(async (id: string, _code: string, host: HTMLElement) => {
+      expect(host).toBeInTheDocument();
+      expect(host.inert).toBe(true);
+      expect(host.style.opacity).toBe("0");
       const temporary = document.createElement("div");
       temporary.id = `d${id}`;
-      document.body.appendChild(temporary);
+      host.appendChild(temporary);
       return { svg: `<svg id="${id}" role="graphics-document"><text>Diagram</text></svg>` };
     });
 
@@ -52,9 +55,11 @@ describe("Mermaid post renderer", () => {
         "themeCSS",
         "themeVariables",
         "fontFamily",
+        "dompurifyConfig",
       ])
     );
     expect(document.getElementById(`d${renderId}`)).not.toBeInTheDocument();
+    expect(document.getElementById(`${renderId}-render-host`)).not.toBeInTheDocument();
     expect(diagram).toHaveClass("mermaid-rendered");
     expect(diagram.querySelector("svg")).toHaveAttribute("id", renderId);
     expect(diagram.querySelector("svg")).toHaveTextContent("Diagram");
@@ -62,11 +67,11 @@ describe("Mermaid post renderer", () => {
   });
 
   it("構文エラー時にMermaidの一時DOMを本文外へ残さない", async () => {
-    renderMock.mockImplementation(async (id: string) => {
+    renderMock.mockImplementation(async (id: string, _code: string, host: HTMLElement) => {
       const temporary = document.createElement("div");
       temporary.id = `d${id}`;
       temporary.innerHTML = '<svg><text class="error-text">Syntax error in text</text></svg>';
-      document.body.appendChild(temporary);
+      host.appendChild(temporary);
       throw new Error("Parse error");
     });
 

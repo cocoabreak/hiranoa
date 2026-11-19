@@ -47,6 +47,7 @@ function markdown(timeout, extra) {
   return (
     `---\ntitle: Guide\n---\n# Connection guide\n\nTimeout: ${timeout} seconds.\n\n${extra}\n\n[Jump to last step](#step-34) · [Other document](../secret.md)\n\n![Versioned image](assets/example.svg)\n\n\`\`\`mermaid\ngraph LR\n  A[Start] --> B[Done]\n\`\`\`\n\nMath: $\\frac{1}{2}$.\n\n` +
     '\n```mermaid\n%%{init: {"themeCSS":".node rect {fill:url(https://example.invalid/history-probe.svg)}"}}%%\nflowchart TD\nA[probe]\n```\n\n' +
+    `| Setting | Package name |\n| --- | --- |\n| Theme | ${"Example".repeat(40)} |\n\n` +
     Array.from({ length: 35 }, (_, i) => `## Step ${i}\n\nRead section ${i}.\n`).join("\n") +
     `\nRead [options][ref] and this note[^note].\n\n[ref]: https://example.invalid/${timeout}\n\n[^note]: Timeout note ${timeout}.\n`
   );
@@ -129,6 +130,29 @@ try {
     2
   );
   await driver.waitFor(`document.querySelector('.history-view .history-word-change') !== null`);
+  assert.deepEqual(
+    await evaluate(
+      `Array.from(document.querySelectorAll('.history-pane'), pane => {
+        const document = pane.querySelector('.history-document');
+        const version = pane.querySelector('.history-version');
+        pane.scrollLeft = 80;
+        const result = {
+          contain: getComputedStyle(pane).contain,
+          isolation: getComputedStyle(document).isolation,
+          canScrollWideTable: pane.scrollLeft > 0 && pane.scrollWidth > pane.clientWidth,
+          headerOnTop: getComputedStyle(version).zIndex === "10"
+        };
+        pane.scrollLeft = 0;
+        return result;
+      })`
+    ),
+    Array.from({ length: 2 }, () => ({
+      contain: "paint",
+      isolation: "isolate",
+      canScrollWideTable: true,
+      headerOnTop: true,
+    }))
+  );
   await driver.waitFor(
     `document.querySelector('.history-gutter path')?.getAttribute('d')?.length > 10`
   );
