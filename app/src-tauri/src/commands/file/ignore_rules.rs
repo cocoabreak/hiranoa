@@ -434,12 +434,6 @@ mod tests {
         fs::create_dir(&work).unwrap();
         fs::create_dir(&metadata).unwrap();
         fs::create_dir_all(common.join("info")).unwrap();
-        // Git normally writes an absolute path in the worktree's metadata.
-        fs::write(
-            work.join(".git"),
-            format!("gitdir: {}\n", metadata.display()),
-        )
-        .unwrap();
         fs::write(metadata.join("commondir"), "../common\n").unwrap();
         fs::write(common.join("info/exclude"), "hidden.md\n").unwrap();
         fs::write(work.join("hidden.md"), "").unwrap();
@@ -447,8 +441,16 @@ mod tests {
 
         let roots = AllowedRoots::new();
         roots.register(root.to_str().unwrap()).unwrap();
-        let walk_root = roots.resolve(work.to_str().unwrap()).unwrap();
-        assert_eq!(entry_names(&walk_root, &roots, true), ["visible.md"]);
+        let root = roots.resolve(root.to_str().unwrap()).unwrap();
+        let walk_root = root.join("work");
+        let metadata = root.join("metadata");
+        // Use the approved path spelling; the OS temp path can be an alias.
+        let absolute = super::super::readers::normalize_path_for_display(&metadata);
+        for git_dir in [absolute.as_str(), "../metadata"] {
+            assert_eq!(git_path(&walk_root, git_dir).as_ref(), Some(&metadata));
+            fs::write(walk_root.join(".git"), format!("gitdir: {git_dir}\n")).unwrap();
+            assert_eq!(entry_names(&walk_root, &roots, true), ["visible.md"]);
+        }
     }
 
     #[test]
