@@ -1,4 +1,5 @@
 import { lightboxStore } from "$lib/stores/lightbox.svelte";
+import { PREVIEW_LINK_SELECTOR } from "./preview-links";
 
 const EXPAND_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/></svg>`;
 
@@ -38,5 +39,17 @@ export function setupImageLightboxTrigger(container: HTMLElement): () => void {
 export function addMermaidExpandButton(mermaidEl: HTMLElement): void {
   const svg = mermaidEl.querySelector("svg");
   if (!svg) return;
-  mermaidEl.appendChild(createExpandButton(() => lightboxStore.openSvg(svg.outerHTML, svg)));
+  mermaidEl.appendChild(
+    createExpandButton(() => {
+      const display = svg.cloneNode(true) as SVGSVGElement;
+      // Remove link destinations before inserting the copy into the lightbox.
+      for (const link of display.querySelectorAll(PREVIEW_LINK_SELECTOR)) {
+        link.removeAttribute("href");
+        link.removeAttribute("xlink:href");
+        link.removeAttributeNS("http://www.w3.org/1999/xlink", "href");
+        link.removeAttribute("tabindex");
+      }
+      lightboxStore.openSvg(display.outerHTML, svg);
+    })
+  );
 }
