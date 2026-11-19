@@ -555,6 +555,46 @@ try {
     assert.ok(restored.scroll.rendered >= 500, `scroll=${restored.scroll.rendered}`);
   });
 
+  await test("現在の文書ソースから別の認可済みソースの本文と画像を読めない", async () => {
+    const sibling = path.join(workDir, "other-source");
+    const outsideMarkdown = path.join(sibling, "note.md");
+    const outsideImage = path.join(sibling, "pixel.GIF");
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(outsideMarkdown, "# Other source");
+    writeFileSync(
+      outsideImage,
+      readFileSync(path.join(path.dirname(fixtures.compatibility), "images/pixel.GIF"))
+    );
+    await open("openMarkdownFile", fixtures.compatibility);
+    await driver.waitFor(`(() => {
+      const body = document.querySelector('.markdown-body');
+      const image = body?.querySelector('img[alt="Supported format"]');
+      return body?.querySelector('h1')?.textContent === 'Markdown compatibility' &&
+        image?.getAttribute('src')?.startsWith('data:image/gif;base64,') && image.naturalWidth === 1;
+    })()`);
+    const result = await driver.evaluate(`(async () => {
+      const { tabStore } = await import('/src/lib/stores/tab.svelte.ts');
+      const { document: { sourceId } } = tabStore.tabs.find(tab => tab.id === tabStore.activeTabId);
+      const { invoke } = window.__TAURI_INTERNALS__;
+      await invoke('authorize_dev_path', { path: ${js(sibling)} });
+      const markdownAllowed = await invoke('is_path_allowed', { path: ${js(outsideMarkdown)} });
+      const imageAllowed = await invoke('is_path_allowed', { path: ${js(outsideImage)} });
+      const readError = (command, path) => invoke(command, { document: { sourceId, path } })
+        .then(() => null, error => String(error));
+      return {
+        markdownAllowed, imageAllowed,
+        markdownError: await readError('read_source_markdown', '../other-source/note.md'),
+        imageError: await readError('read_source_image', '../other-source/pixel.GIF'),
+      };
+    })()`);
+    assert.deepEqual(result, {
+      markdownAllowed: true,
+      imageAllowed: true,
+      markdownError: "ソースのルート外へ移動できません",
+      imageError: "ソースのルート外へ移動できません",
+    });
+  });
+
   const unexpectedErrors = diagnostics.errors.filter(
     (message) =>
       !message.includes(mermaidPolicyProbeUrl) || !message.includes("Content Security Policy")
