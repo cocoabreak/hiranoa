@@ -1,4 +1,3 @@
-import { addMermaidExpandButton } from "$lib/markdown/image-lightbox-trigger";
 import type { Locale } from "$lib/i18n/index.svelte";
 import { EXTERNAL_IMAGES_BLOCKED_EVENT } from "$lib/markdown/external-images";
 
@@ -83,6 +82,7 @@ async function renderOne(
     }
     const scope = viewRoot?.dataset.viewScope;
     const svgTools = scope ? await import("$lib/markdown/view-svg") : null;
+    const { addMermaidExpandButton } = await import("./lightbox");
     if (!isCurrent()) return;
     el.innerHTML = svg;
     if (svgTools && scope) svgTools.namespaceGeneratedSvg(el, `view-${scope}`, viewRoot);

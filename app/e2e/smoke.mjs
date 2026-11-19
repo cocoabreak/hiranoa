@@ -199,6 +199,112 @@ try {
     assert.equal(labelMetrics.paragraphLineHeight, "28px");
   });
 
+  await test("Mermaid の拡大表示はリンクを無効にし、拡大・移動・終了できる", async () => {
+    const file = path.join(workDir, "fixtures", "lightbox-mermaid.md");
+    writeFileSync(
+      file,
+      '# Diagram\n\n```mermaid\nflowchart LR\n  A[Overview] --> B[Details]\n  click A href "#details"\n```\n\n## Details\n'
+    );
+    await open("openMarkdownFile", file);
+    const expand = ".mermaid-rendered .lightbox-trigger-button";
+    const original = ".mermaid-rendered svg a";
+    await driver.waitFor(`document.querySelector(${JSON.stringify(original)}) !== null`);
+    const appUrl = await driver.evaluate("location.href");
+    const getLink = (selector) =>
+      driver.evaluate(`(() => {
+        const link = document.querySelector(${JSON.stringify(selector)});
+        return [link.getAttribute("href"), link.getAttributeNS("http://www.w3.org/1999/xlink", "href")];
+      })()`);
+    assert.ok((await getLink(original)).includes("#details"));
+
+    const dialog = '[role="dialog"]:has(svg a)';
+    const link = `${dialog} svg a`;
+    const close = `${dialog} > button`;
+    const client = await driver.connect();
+    const pressKey = async (key, windowsVirtualKeyCode) => {
+      const fields = { key, code: key, windowsVirtualKeyCode };
+      await client.send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...fields });
+      await client.send("Input.dispatchKeyEvent", { type: "keyUp", ...fields });
+    };
+    const mouseButton = async (type, point, button, buttons) =>
+      client.send("Input.dispatchMouseEvent", { type, ...point, button, buttons, clickCount: 1 });
+    const waitForDialog = (present) =>
+      driver.waitFor(`Boolean(document.querySelector(${JSON.stringify(dialog)})) === ${present}`);
+    try {
+      assert.equal(await driver.click(expand), "OK");
+      await waitForDialog(true);
+      assert.deepEqual(await getLink(link), [null, null]);
+      assert.ok((await getLink(original)).includes("#details"));
+
+      const point = await driver.evaluate(`(() => {
+        const anchor = document.querySelector(${JSON.stringify(link)});
+        const box = anchor.getBoundingClientRect();
+        const x = box.left + box.width / 2;
+        const y = box.top + box.height / 2;
+        return anchor.contains(document.elementFromPoint(x, y)) ? { x, y } : null;
+      })()`);
+      assert.ok(point, "拡大した SVG のリンク位置を実マウスで操作できる");
+      for (const [button, buttons] of [
+        ["left", 1],
+        ["middle", 4],
+      ]) {
+        await mouseButton("mousePressed", point, button, buttons);
+        await mouseButton("mouseReleased", point, button, 0);
+      }
+      assert.equal(await driver.evaluate("location.href"), appUrl);
+
+      // A presentation-only link is skipped by Tab. Enter also has no destination
+      // if the element receives focus (for example, from a keyboard tool).
+      const focus = (selector) =>
+        driver.evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);
+      const hasFocus = (selector) =>
+        driver.evaluate(`document.activeElement.matches(${JSON.stringify(selector)})`);
+      await focus(close);
+      await pressKey("Tab", 9);
+      assert.equal(await hasFocus(close), true);
+      await driver.evaluate(
+        `document.querySelector(${JSON.stringify(link)}).setAttribute("tabindex", "0")`
+      );
+      await focus(link);
+      assert.equal(await hasFocus(link), true);
+      await pressKey("Enter", 13);
+      assert.equal(await driver.evaluate("location.href"), appUrl);
+      assert.equal((await driver.targets()).filter((target) => target.type === "page").length, 1);
+
+      const matrix = `new DOMMatrixReadOnly(getComputedStyle(document.querySelector(
+        ${JSON.stringify(`${dialog} div[style^="transform:"]`)}
+      )).transform)`;
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseWheel",
+        ...point,
+        deltaX: 0,
+        deltaY: -120,
+      });
+      await driver.waitFor(`${matrix}.a > 1`);
+      await mouseButton("mousePressed", point, "left", 1);
+      await client.send("Input.dispatchMouseEvent", {
+        type: "mouseMoved",
+        x: point.x + 32,
+        y: point.y + 18,
+        button: "left",
+        buttons: 1,
+      });
+      await mouseButton("mouseReleased", { x: point.x + 32, y: point.y + 18 }, "left", 0);
+      await driver.waitFor(`${matrix}.e === 32 && ${matrix}.f === 18`);
+
+      await focus(close);
+      await pressKey("Escape", 27);
+      await waitForDialog(false);
+      assert.equal(await driver.click(expand), "OK");
+      await waitForDialog(true);
+      assert.equal(await driver.evaluate(`${matrix}.isIdentity`), true);
+      assert.equal(await driver.click(close), "OK");
+      await waitForDialog(false);
+    } finally {
+      client.close();
+    }
+  });
+
   await test("Mermaid の外部画像は確認・ブロック中にリクエストを開始しない", async () => {
     const imageOrigin = "https://mermaid-images.example.invalid";
     const png = readFileSync(path.join(appDir, "static", "favicon.png")).toString("base64");

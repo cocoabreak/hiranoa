@@ -2,7 +2,7 @@ import { lightboxStore } from "$lib/stores/lightbox.svelte";
 
 const EXPAND_ICON = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/></svg>`;
 
-function createExpandButton(onOpen: () => void): HTMLButtonElement {
+export function createExpandButton(onOpen: () => void): HTMLButtonElement {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "lightbox-trigger-button";
@@ -32,11 +32,4 @@ export function setupImageLightboxTrigger(container: HTMLElement): () => void {
   });
 
   return () => lightboxStore.closeFrom(container);
-}
-
-/** Mermaidが遅延レンダリングされた直後に plugins/mermaid/post.ts から呼び出し、展開アイコンを追加する */
-export function addMermaidExpandButton(mermaidEl: HTMLElement): void {
-  const svg = mermaidEl.querySelector("svg");
-  if (!svg) return;
-  mermaidEl.appendChild(createExpandButton(() => lightboxStore.openSvg(svg.outerHTML, svg)));
 }
