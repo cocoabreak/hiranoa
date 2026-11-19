@@ -141,6 +141,24 @@ describe("split workspace", () => {
     expect(workspaceStore.paneIds).toHaveLength(2);
   });
 
+  it("開き直したネイティブ文書は同じタブで新しいソースと本文を参照する", async () => {
+    add("existing");
+    contentStore.set("notes:a.md", { raw: "# Old", safeOutline: [], safeOutlineTruncated: false });
+    const reopenedSource = { ...source, id: "reopened", nativePath: "d:/NOTES" };
+    const reopened = { ...document, sourceId: reopenedSource.id };
+
+    expect(await openSourceMarkdown(reopened, reopenedSource)).toBe(true);
+    expect(tabStore.tabs).toHaveLength(1);
+    expect(tabStore.tabs[0]).toMatchObject({
+      id: "existing",
+      path: "reopened:a.md",
+      document: reopened,
+      source: reopenedSource,
+    });
+    expect(contentStore.get("reopened:a.md")?.raw).toBe("# A");
+    expect(contentStore.get("notes:a.md")).toBeUndefined();
+  });
+
   it("読込中に操作対象を変えても開始時のペインへだけ結果を適用する", async () => {
     add("left");
     const left = workspaceStore.activePaneId;

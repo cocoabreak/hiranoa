@@ -60,7 +60,6 @@
     "allow-get-shell-integration-status",
     "allow-set-shell-integration-enabled",
     "allow-search-in-directory",
-    "allow-resolve-wiki-links",
     "allow-register-native-source",
     "allow-register-native-document-source",
     "allow-register-zip-source",

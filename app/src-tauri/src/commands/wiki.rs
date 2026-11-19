@@ -1,11 +1,10 @@
-use super::file::ignore_rules::walk_entries;
-use super::file::{normalize_path_for_frontend, AllowedRoots};
+use super::file::directory_scan::{RegisteredDirectory, SubdirectoryErrors};
+use super::file::AllowedRoots;
 use super::MARKDOWN_EXTENSIONS;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::State;
 
 const MAX_WIKI_SCAN_ENTRIES: usize = 10_000;
 const MAX_WIKI_TARGETS: usize = 1_000;
@@ -17,10 +16,11 @@ const MAX_CACHED_WIKI_INDEXES: usize = 8;
 
 struct WikiIndexEntry {
     created_at: Instant,
+    directory: RegisteredDirectory,
     files: Vec<String>,
 }
 
-pub struct WikiIndexState(Mutex<HashMap<(String, bool), WikiIndexEntry>>);
+pub struct WikiIndexState(Mutex<HashMap<(PathBuf, bool), WikiIndexEntry>>);
 
 impl WikiIndexState {
     pub fn new() -> Self {
@@ -30,27 +30,40 @@ impl WikiIndexState {
     pub(crate) fn get_or_build(
         &self,
         scan_root: &Path,
+        directory: &RegisteredDirectory,
         respect_gitignore: bool,
         roots: &AllowedRoots,
     ) -> Result<Vec<String>, String> {
-        let key = (
-            normalize_path_for_frontend(scan_root).to_lowercase(),
-            respect_gitignore,
-        );
+        let key = (scan_root.to_owned(), respect_gitignore);
         let now = Instant::now();
-        {
+        let cached = {
             let mut indexes = self
                 .0
                 .lock()
                 .map_err(|_| "Wikiインデックスのロックに失敗しました".to_string())?;
             indexes.retain(|_, entry| now.duration_since(entry.created_at) < WIKI_INDEX_TTL);
-            if let Some(entry) = indexes.get(&key) {
-                return Ok(entry.files.clone());
-            }
+            indexes
+                .get(&key)
+                .filter(|entry| entry.directory.same_as(directory))
+                .map(|entry| entry.files.clone())
+        };
+        if let Some(files) = cached {
+            // A cache hit verifies identity without waiting for a scan slot.
+            directory.verify_current(scan_root, roots)?;
+            return Ok(files);
         }
 
         // ファイル走査中はcache mutexを保持せず、別ルートの解決を待たせない。
-        let files = collect_markdown_files(scan_root, respect_gitignore, roots);
+        let (paths, _) = directory.open_verified(scan_root, roots)?.markdown_paths(
+            true,
+            respect_gitignore,
+            MAX_WIKI_SCAN_ENTRIES,
+            SubdirectoryErrors::Skip,
+        )?;
+        let files: Vec<_> = paths
+            .into_iter()
+            .map(|path| path.to_string_lossy().replace('\\', "/"))
+            .collect();
         let mut indexes = self
             .0
             .lock()
@@ -68,6 +81,7 @@ impl WikiIndexState {
             key,
             WikiIndexEntry {
                 created_at: now,
+                directory: directory.clone(),
                 files: files.clone(),
             },
         );
@@ -82,38 +96,6 @@ fn ends_with_markdown_ext(lower: &str) -> bool {
     MARKDOWN_EXTENSIONS
         .iter()
         .any(|ext| lower.ends_with(&format!(".{ext}")))
-}
-
-/// `[[ページ名]]` のリスト（targets）をワークスペース内のファイルパスへ一括解決する。
-/// 探索起点はroot（未指定ならcurrent_fileの親フォルダ）で、AllowedRootsの信頼範囲内に限る。
-/// 戻り値はページ名→解決パス（見つからなければNone）のマップ。
-#[tauri::command(async)]
-pub fn resolve_wiki_links(
-    current_file: String,
-    targets: Vec<String>,
-    root: Option<String>,
-    respect_gitignore: bool,
-    state: State<'_, AllowedRoots>,
-    indexes: State<'_, WikiIndexState>,
-) -> Result<HashMap<String, Option<String>>, String> {
-    let targets = validate_targets(targets)?;
-    let current_file = current_file.replace('\\', "/");
-    let scan_root = match &root {
-        Some(r) => r.replace('\\', "/"),
-        None => Path::new(&current_file)
-            .parent()
-            .ok_or_else(|| "現在ファイルの親フォルダーを特定できません".to_string())?
-            .to_string_lossy()
-            .replace('\\', "/"),
-    };
-
-    // canonicalize済みの起点を走査し、各候補もAllowedRootsで再検証する。
-    let canonical_root = state.resolve(&scan_root)?;
-
-    let files = indexes.get_or_build(&canonical_root, respect_gitignore, &state)?;
-    let current_dir = parent_components_lower(&current_file);
-
-    resolve_targets(targets, &files, &current_dir)
 }
 
 pub(crate) fn validate_targets(targets: Vec<String>) -> Result<Vec<String>, String> {
@@ -138,31 +120,6 @@ pub(crate) fn validate_targets(targets: Vec<String>) -> Result<Vec<String>, Stri
         return Err("Wikiリンク名の合計は64KiB以下にしてください".to_string());
     }
     Ok(targets)
-}
-
-/// 探索起点以下の全Markdownファイルのパス（スラッシュ正規化済み）を収集する
-fn collect_markdown_files(
-    scan_root: &Path,
-    respect_gitignore: bool,
-    roots: &AllowedRoots,
-) -> Vec<String> {
-    // 隠しファイルの扱いはツリーと同じく除外しない。
-    let walk = walk_entries(scan_root, roots, true, respect_gitignore, None);
-    let mut files = Vec::new();
-    for entry in walk.flatten().take(MAX_WIKI_SCAN_ENTRIES) {
-        if !entry.file_type().is_some_and(|t| t.is_file()) {
-            continue;
-        }
-        if roots.resolve(&entry.path().to_string_lossy()).is_err() {
-            continue;
-        }
-        let path = normalize_path_for_frontend(entry.path());
-        let lower = path.to_lowercase();
-        if ends_with_markdown_ext(&lower) {
-            files.push(path);
-        }
-    }
-    files
 }
 
 /// パスの親フォルダをコンポーネント列（小文字）にする。近接ランキングの基準に使う
@@ -471,7 +428,10 @@ mod tests {
         let roots = AllowedRoots::new();
         roots.register(&dir.path().to_string_lossy()).unwrap();
         let root = roots.resolve(&dir.path().to_string_lossy()).unwrap();
-        let files = collect_markdown_files(&root, false, &roots);
+        let directory = RegisteredDirectory::capture(&root, &roots).unwrap();
+        let files = WikiIndexState::new()
+            .get_or_build(&root, &directory, false, &roots)
+            .unwrap();
         let names: Vec<&str> = files
             .iter()
             .map(|p| p.rsplit('/').next().unwrap())
@@ -492,11 +452,17 @@ mod tests {
         let roots = AllowedRoots::new();
         roots.register(&dir.path().to_string_lossy()).unwrap();
         let root = roots.resolve(&dir.path().to_string_lossy()).unwrap();
-        let with = collect_markdown_files(&root, true, &roots);
+        let directory = RegisteredDirectory::capture(&root, &roots).unwrap();
+        let indexes = WikiIndexState::new();
+        let with = indexes
+            .get_or_build(&root, &directory, true, &roots)
+            .unwrap();
         assert!(!with.iter().any(|p| p.ends_with("hidden.md")));
         assert!(with.iter().any(|p| p.ends_with("visible.md")));
 
-        let without = collect_markdown_files(&root, false, &roots);
+        let without = indexes
+            .get_or_build(&root, &directory, false, &roots)
+            .unwrap();
         assert!(without.iter().any(|p| p.ends_with("hidden.md")));
     }
 }

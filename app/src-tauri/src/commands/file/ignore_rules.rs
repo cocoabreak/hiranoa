@@ -27,24 +27,43 @@ pub(crate) fn walk_entries(
         .max_depth(max_depth);
     if respect_gitignore {
         let roots = roots.clone();
-        let rules = Mutex::new(WalkRules {
-            directories: Vec::new(),
-            global: global_rules(),
+        let rules = Mutex::new(WalkRules::new());
+        builder.filter_entry(move |entry| {
+            rules.lock().unwrap().includes(
+                entry.path(),
+                entry.file_type().is_some_and(|kind| kind.is_dir()),
+                !show_hidden && is_hidden(entry),
+                show_hidden,
+                |dir| roots.resolve_opened_path(dir.to_owned()).is_ok(),
+                |path| open_rule_path(&roots, path),
+            )
         });
-        builder
-            .filter_entry(move |entry| rules.lock().unwrap().includes(entry, &roots, show_hidden));
     }
     builder.build()
 }
 
-struct WalkRules {
+pub(super) struct WalkRules {
     directories: Vec<(PathBuf, DirectoryRules)>,
     global: Gitignore,
 }
 
 impl WalkRules {
-    fn includes(&mut self, entry: &DirEntry, roots: &AllowedRoots, show_hidden: bool) -> bool {
-        let path = entry.path();
+    pub(super) fn new() -> Self {
+        Self {
+            directories: Vec::new(),
+            global: global_rules(),
+        }
+    }
+
+    pub(super) fn includes(
+        &mut self,
+        path: &Path,
+        is_dir: bool,
+        hidden: bool,
+        show_hidden: bool,
+        allowed: impl Fn(&Path) -> bool,
+        open: impl Fn(&Path) -> Option<File>,
+    ) -> bool {
         let Some(parent) = path.parent() else {
             return true;
         };
@@ -58,21 +77,20 @@ impl WalkRules {
         let last = self.directories.last().map(|(dir, _)| dir.as_path());
         let mut new_dirs = Vec::new();
         for dir in parent.ancestors().take_while(|dir| Some(*dir) != last) {
-            if roots.resolve_opened_path(dir.to_path_buf()).is_err() {
+            if !allowed(dir) {
                 break;
             }
             new_dirs.push(dir);
         }
         for dir in new_dirs.into_iter().rev() {
             self.directories
-                .push((dir.to_owned(), DirectoryRules::load(dir, roots)));
+                .push((dir.to_owned(), DirectoryRules::load(dir, &open)));
         }
 
-        let is_dir = entry.file_type().is_some_and(|kind| kind.is_dir());
         match self.matched(path, is_dir) {
             Match::Ignore(_) => false,
             Match::Whitelist(_) => true,
-            Match::None => show_hidden || !is_hidden(entry),
+            Match::None => show_hidden || !hidden,
         }
     }
 
@@ -127,8 +145,7 @@ struct DirectoryRules {
 }
 
 impl DirectoryRules {
-    fn load(dir: &Path, roots: &AllowedRoots) -> Self {
-        let open = |path: &Path| open_rule_path(roots, path);
+    fn load(dir: &Path, open: &impl Fn(&Path) -> Option<File>) -> Self {
         let dot_git = dir.join(".git");
         let git =
             open(&dot_git).and_then(|file| file.metadata().ok().map(|metadata| (file, metadata)));
@@ -213,7 +230,7 @@ fn git_path(base: &Path, value: &str) -> Option<PathBuf> {
     Some(normalized)
 }
 
-fn open_rule_path(roots: &AllowedRoots, path: &Path) -> Option<File> {
+pub(super) fn open_rule_path(roots: &AllowedRoots, path: &Path) -> Option<File> {
     roots.resolve_opened_path(path.to_path_buf()).ok()?;
     let requested = roots.share_checked_input(path.to_str()?).ok()?;
     let file = open_direct(&requested, true).ok()?;
@@ -323,10 +340,10 @@ fn load_global_rules(
 }
 
 #[cfg(windows)]
-use super::windows_open::open_direct;
+pub(super) use super::windows_open::open_direct;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn open_direct(path: &Path, _allow_share: bool) -> io::Result<File> {
+pub(super) fn open_direct(path: &Path, _allow_share: bool) -> io::Result<File> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::ffi::OsStrExt;

@@ -23,6 +23,7 @@ import {
   documentKey,
   nativeDocumentIdentity,
   nativeDocumentPath,
+  nativePathsEqual,
   rememberDocument,
   registerNativeDocument,
 } from "$lib/document-sources";
@@ -160,8 +161,13 @@ export async function openSourceMarkdown(
       if (!nativeIdentity || !tab.document || !tab.source) return false;
       return nativeDocumentIdentity(tab.source, tab.document) === nativeIdentity;
     });
-    const tabKey = existing?.path ?? key;
-    if (!existing || existing.path === key) rememberDocument(document, source);
+    const refreshSource =
+      existing?.source?.kind === "native" &&
+      source.kind === "native" &&
+      existing.source.id !== source.id &&
+      nativePathsEqual(existing.source.nativePath, source.nativePath);
+    const tabKey = refreshSource ? key : (existing?.path ?? key);
+    if (tabKey === key) rememberDocument(document, source);
     contentStore.set(tabKey, {
       raw: loaded.raw,
       safeOutline: loaded.safeOutline,
@@ -170,7 +176,14 @@ export async function openSourceMarkdown(
 
     const isNew = !existing;
     if (existing) {
-      tabs.updateTab(existing.id, { renderMode: loaded.renderMode, status: "ok" });
+      tabs.updateTab(existing.id, {
+        ...(refreshSource ? { path: key, document, source, displayPath, title } : {}),
+        renderMode: loaded.renderMode,
+        status: "ok",
+      });
+      if (refreshSource && !tabStore.allTabs.some((tab) => tab.path === existing.path)) {
+        contentStore.delete(existing.path);
+      }
       tabs.setActive(existing.id, false);
     } else {
       tabs.addOrActivate({
