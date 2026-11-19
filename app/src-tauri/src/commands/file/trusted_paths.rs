@@ -2,7 +2,7 @@ use super::windows_share::WindowsSharePath;
 use crate::commands::has_markdown_extension;
 use std::borrow::Cow;
 use std::collections::HashSet;
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -17,7 +17,37 @@ pub(super) enum ShareQuery {
 }
 
 fn canonicalize_path(path: &Path) -> Result<PathBuf, String> {
-    std::fs::canonicalize(path).map_err(|error| format!("パスの解決に失敗しました: {error}"))
+    #[cfg(windows)]
+    {
+        let handle = super::windows_open::open(path, false)
+            .map_err(|error| format!("パスの解決に失敗しました: {error}"))?;
+        final_path_for_file(&handle)
+    }
+    #[cfg(not(windows))]
+    {
+        std::fs::canonicalize(path).map_err(|error| format!("パスの解決に失敗しました: {error}"))
+    }
+}
+
+pub(super) fn inspect_path(path: &Path) -> Result<Option<(PathBuf, Metadata)>, String> {
+    #[cfg(windows)]
+    let opened = super::windows_open::open(path, false);
+    #[cfg(windows)]
+    let result = match opened {
+        Ok(handle) => {
+            let canonical = final_path_for_file(&handle)?;
+            handle.metadata().map(|metadata| (canonical, metadata))
+        }
+        Err(error) => Err(error),
+    };
+    #[cfg(not(windows))]
+    let result = std::fs::canonicalize(path)
+        .and_then(|canonical| std::fs::metadata(&canonical).map(|metadata| (canonical, metadata)));
+    match result {
+        Ok(found) => Ok(Some(found)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("パスを確認できませんでした: {error}")),
+    }
 }
 
 /// ユーザーが明示的に許可したフォルダールートと単一ファイルの集合。
@@ -45,7 +75,7 @@ impl AllowedRoots {
     }
 
     pub(super) fn root_for_canonical_path(canonical: PathBuf) -> Result<PathBuf, String> {
-        let root = if canonical.is_dir() {
+        let root = if inspect_path(&canonical)?.is_some_and(|(_, metadata)| metadata.is_dir()) {
             canonical
         } else {
             canonical
@@ -80,7 +110,7 @@ impl AllowedRoots {
     }
 
     pub(super) fn validate_canonical_zip_file(canonical: PathBuf) -> Result<PathBuf, String> {
-        if !canonical.is_file() {
+        if !inspect_path(&canonical)?.is_some_and(|(_, metadata)| metadata.is_file()) {
             return Err("ファイルを指定してください".to_string());
         }
         if !canonical
@@ -178,15 +208,40 @@ impl AllowedRoots {
         path: &str,
         canonicalize: impl FnOnce(&Path) -> Result<PathBuf, String>,
     ) -> Result<PathBuf, String> {
-        let input = match WindowsSharePath::from_input(path)? {
-            Some(share) if self.share_path_is_trusted(&share) => Cow::Owned(share.as_path()),
-            Some(_) => return Err("共有パスへのアクセスが許可されていません".into()),
-            None => Cow::Borrowed(Path::new(path)),
-        };
+        let input = self.share_checked_input(path)?;
         self.resolve_opened_path(canonicalize(&input)?)
     }
 
-    pub(super) fn resolve_opened_path(&self, canonical: PathBuf) -> Result<PathBuf, String> {
+    fn share_checked_input<'a>(&self, path: &'a str) -> Result<Cow<'a, Path>, String> {
+        Ok(match WindowsSharePath::from_input(path)? {
+            Some(share) if self.share_path_is_trusted(&share) => Cow::Owned(share.as_path()),
+            Some(_) => return Err("共有パスへのアクセスが許可されていません".into()),
+            None => Cow::Borrowed(Path::new(path)),
+        })
+    }
+
+    /// Apply the share gate before probing. Callers must check the returned path's
+    /// trust and source boundaries before using the result.
+    pub(crate) fn inspect_share_checked_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<(PathBuf, Metadata)>, String> {
+        inspect_path(&self.share_checked_input(path)?)
+    }
+
+    pub(crate) fn inspect_allowed_path(
+        &self,
+        path: &str,
+    ) -> Result<Option<(PathBuf, Metadata)>, String> {
+        self.inspect_share_checked_path(path)?
+            .map(|(canonical, metadata)| {
+                self.resolve_opened_path(canonical)
+                    .map(|path| (path, metadata))
+            })
+            .transpose()
+    }
+
+    pub(crate) fn resolve_opened_path(&self, canonical: PathBuf) -> Result<PathBuf, String> {
         let entries = self.0.lock().unwrap();
         if entries.files.contains(&canonical)
             || entries.roots.iter().any(|root| canonical.starts_with(root))
@@ -204,9 +259,12 @@ impl AllowedRoots {
     pub(crate) fn register_input_paths(&self, paths: &[PathBuf]) {
         let mut folder_registered = false;
         for path in paths.iter().take(MAX_INPUT_PATHS) {
-            if path.is_dir() && !folder_registered {
+            let Ok(Some((_, metadata))) = inspect_path(path) else {
+                continue;
+            };
+            if metadata.is_dir() && !folder_registered {
                 folder_registered = self.register(&path.to_string_lossy()).is_ok();
-            } else if path.is_file() {
+            } else if metadata.is_file() {
                 let is_zip = path
                     .extension()
                     .and_then(|extension| extension.to_str())
@@ -289,8 +347,12 @@ pub(crate) fn open_allowed_file(
     state: &AllowedRoots,
     path: &str,
 ) -> Result<(File, PathBuf), String> {
-    let canonical = state.resolve(path)?;
-    let file = File::open(&canonical).map_err(|e| format!("ファイル読み込みエラー: {}", e))?;
+    #[cfg(windows)]
+    let file = super::windows_open::open(&state.share_checked_input(path)?, true)
+        .map_err(|error| format!("パスの解決に失敗しました: {error}"))?;
+    #[cfg(not(windows))]
+    let file = File::open(state.resolve(path)?)
+        .map_err(|error| format!("ファイル読み込みエラー: {error}"))?;
     let opened_path = final_path_for_file(&file)?;
     let verified = state.resolve_opened_path(opened_path)?;
     Ok((file, verified))

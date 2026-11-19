@@ -66,11 +66,9 @@ pub(crate) fn restore_persisted_explorer_root(
 }
 
 pub(super) fn validate_persisted_explorer_root(path: &str) -> Result<PathBuf, String> {
-    let canonical = std::fs::canonicalize(path)
-        .map_err(|e| format!("保存済みExplorerルートを解決できません: {e}"))?;
-    if !canonical.is_dir() {
-        return Err("保存済みExplorerルートはフォルダーではありません".to_string());
-    }
+    let (canonical, _) = super::trusted_paths::inspect_path(Path::new(path))?
+        .filter(|(_, metadata)| metadata.is_dir())
+        .ok_or_else(|| "保存済みExplorerルートはフォルダーではありません".to_string())?;
     if let Some(reason) = dangerous_root_reason(&canonical) {
         return Err(reason.to_string());
     }

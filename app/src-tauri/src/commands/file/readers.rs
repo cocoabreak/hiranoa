@@ -43,8 +43,7 @@ pub struct MarkdownFileContent {
 
 #[tauri::command(async)]
 pub fn stat_path(path: String, state: State<'_, AllowedRoots>) -> Option<PathStat> {
-    let canonical = state.resolve(&path).ok()?;
-    let metadata = std::fs::metadata(canonical).ok()?;
+    let (_, metadata) = state.inspect_allowed_path(&path).ok()??;
     Some(PathStat {
         is_dir: metadata.is_dir(),
         is_file: metadata.is_file(),

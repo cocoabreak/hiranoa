@@ -209,10 +209,9 @@ fn inspect_target(backend: &SourceBackend, path: String, roots: &AllowedRoots) -
     };
     if let SourceBackend::Native(native) = backend {
         let candidate = native.root.join(&normalized);
-        if std::fs::symlink_metadata(&candidate).is_ok()
-            && !roots
-                .resolve(&candidate.to_string_lossy())
-                .is_ok_and(|path| path.starts_with(&native.root))
+        if roots
+            .inspect_share_checked_path(&candidate.to_string_lossy())
+            .is_ok_and(|found| found.is_some_and(|(path, _)| !path.starts_with(&native.root)))
         {
             result.status = "outsideSource";
             return result;
@@ -228,13 +227,11 @@ fn inspect_target(backend: &SourceBackend, path: String, roots: &AllowedRoots) -
     match backend {
         SourceBackend::Native(native) => {
             let candidate = native.root.join(&resolved);
-            match std::fs::symlink_metadata(&candidate) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    result.status = "missing"
-                }
+            match roots.inspect_share_checked_path(&candidate.to_string_lossy()) {
+                Ok(None) => result.status = "missing",
                 Err(_) => {}
-                Ok(_) => match roots.resolve(&candidate.to_string_lossy()) {
-                    Ok(canonical) if canonical.starts_with(&native.root) => {
+                Ok(Some((canonical, _))) => {
+                    if canonical.starts_with(&native.root) {
                         if let Ok((file, final_path)) =
                             crate::commands::file::trusted_paths::open_allowed_file(
                                 roots,
@@ -250,9 +247,10 @@ fn inspect_target(backend: &SourceBackend, path: String, roots: &AllowedRoots) -
                                 result.target = Some(resolved);
                             }
                         }
+                    } else {
+                        result.status = "outsideSource";
                     }
-                    _ => result.status = "outsideSource",
-                },
+                }
             }
         }
         SourceBackend::Zip(zip) => {
