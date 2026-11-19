@@ -1,8 +1,9 @@
 use super::has_markdown_extension;
+use crate::commands::file::ignore_rules::walk_entries;
 use crate::commands::file::{normalize_path_for_frontend, read_file_inner, AllowedRoots};
-use ignore::WalkBuilder;
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc,
@@ -94,7 +95,7 @@ pub async fn search_in_directory(
             .map_err(|error| error.to_string())?;
 
         let (results, truncated, cancelled) = search_markdown_files(
-            &canonical_root.to_string_lossy(),
+            &canonical_root,
             &regex,
             options.show_hidden_files,
             options.respect_gitignore,
@@ -112,26 +113,19 @@ pub async fn search_in_directory(
 }
 
 fn search_markdown_files(
-    root: &str,
+    root: &Path,
     regex: &regex::Regex,
     show_hidden_files: bool,
     respect_gitignore: bool,
     roots: &AllowedRoots,
     is_cancelled: impl Fn() -> bool,
 ) -> (Vec<SearchResult>, bool, bool) {
-    let mut builder = WalkBuilder::new(root);
-    builder
-        .hidden(!show_hidden_files)
-        .git_ignore(respect_gitignore)
-        .git_global(respect_gitignore)
-        .git_exclude(respect_gitignore)
-        .ignore(respect_gitignore)
-        .parents(respect_gitignore);
+    let walk = walk_entries(root, roots, show_hidden_files, respect_gitignore, None);
 
     let mut results = Vec::new();
     let mut total_matches = 0usize;
     let mut truncated = false;
-    for (entry_index, entry) in builder.build().flatten().enumerate() {
+    for (entry_index, entry) in walk.flatten().enumerate() {
         if is_cancelled() {
             return (results, truncated, true);
         }
@@ -207,7 +201,7 @@ mod tests {
         let roots = AllowedRoots::new();
         roots.register_input_paths(&[dir.path().to_path_buf()]);
         let (results, truncated, cancelled) = search_markdown_files(
-            &dir.path().to_string_lossy(),
+            dir.path(),
             &regex("(?i)hello"),
             false,
             false,
@@ -233,19 +227,33 @@ mod tests {
     }
 
     #[test]
+    fn search_applies_gitignore_only_when_enabled() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path();
+        fs::create_dir(path.join(".git")).unwrap();
+        fs::write(path.join(".gitignore"), "draft.md\n").unwrap();
+        fs::write(path.join("draft.md"), "target").unwrap();
+        fs::write(path.join("published.md"), "target").unwrap();
+        let roots = AllowedRoots::new();
+        roots.register(path.to_str().unwrap()).unwrap();
+        let root = roots.resolve(path.to_str().unwrap()).unwrap();
+        let query = regex("target");
+        let (filtered, _, _) = search_markdown_files(&root, &query, false, true, &roots, || false);
+        assert_eq!(filtered.len(), 1);
+        assert!(filtered[0].file_path.ends_with("/published.md"));
+        let (unfiltered, _, _) =
+            search_markdown_files(&root, &query, false, false, &roots, || false);
+        assert_eq!(unfiltered.len(), 2);
+    }
+
+    #[test]
     fn reports_line_numbers_starting_at_one() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("a.md"), "first\ntarget\nthird").unwrap();
         let roots = AllowedRoots::new();
         roots.register_input_paths(&[dir.path().to_path_buf()]);
-        let (results, _, _) = search_markdown_files(
-            &dir.path().to_string_lossy(),
-            &regex("target"),
-            false,
-            false,
-            &roots,
-            || false,
-        );
+        let (results, _, _) =
+            search_markdown_files(dir.path(), &regex("target"), false, false, &roots, || false);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].matches[0].line_number, 2);
     }
@@ -256,14 +264,8 @@ mod tests {
         fs::write(dir.path().join("a.md"), "target").unwrap();
         let roots = AllowedRoots::new();
         roots.register_input_paths(&[dir.path().to_path_buf()]);
-        let (results, _, cancelled) = search_markdown_files(
-            &dir.path().to_string_lossy(),
-            &regex("target"),
-            false,
-            false,
-            &roots,
-            || true,
-        );
+        let (results, _, cancelled) =
+            search_markdown_files(dir.path(), &regex("target"), false, false, &roots, || true);
         assert!(results.is_empty());
         assert!(cancelled);
     }

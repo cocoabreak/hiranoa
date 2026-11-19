@@ -208,6 +208,22 @@ pub(super) fn open(path: &Path, read_contents: bool) -> io::Result<File> {
     Err(unverified_path())
 }
 
+/// Opens scan metadata without following filesystem links, including intermediate links.
+pub(super) fn open_direct(path: &Path, allow_share: bool) -> io::Result<File> {
+    let path = OpenPath::parse(path, allow_share)?;
+    let access = GENERIC_READ;
+    match &path.local_device {
+        Some(device) => open_native(
+            None,
+            &path.native_name(device, path.components.len()),
+            access,
+            0,
+        )
+        .map_err(status_error),
+        None => path.open_share(access, 0),
+    }
+}
+
 fn status_error(status: NTSTATUS) -> io::Error {
     // SAFETY: This API translates the status value without dereferencing pointers.
     io::Error::from_raw_os_error(unsafe { RtlNtStatusToDosError(status) } as i32)

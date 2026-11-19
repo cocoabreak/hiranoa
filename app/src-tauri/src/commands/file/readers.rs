@@ -1,8 +1,8 @@
+use super::ignore_rules::walk_entries;
 use super::safe_outline::{extract_safe_outline, SafeOutlineHeading};
 use super::trusted_paths::{open_allowed_file, AllowedRoots};
 use crate::commands::has_markdown_extension;
 use base64::{engine::general_purpose::STANDARD, Engine};
-use ignore::WalkBuilder;
 use serde::Serialize;
 use std::fs::File;
 use std::io::Read;
@@ -213,11 +213,7 @@ pub fn read_directory(
     state: State<'_, AllowedRoots>,
 ) -> Result<Vec<FileEntry>, String> {
     let canonical = state.resolve(&path)?;
-    Ok(read_dir_single_level(
-        &canonical,
-        respect_gitignore,
-        Some(&state),
-    ))
+    Ok(read_dir_single_level(&canonical, respect_gitignore, &state))
 }
 
 /// ディレクトリ直下1階層を走査してFileEntryのリストを返す。
@@ -227,28 +223,18 @@ pub fn read_directory(
 pub(crate) fn read_dir_single_level(
     path: &Path,
     respect_gitignore: bool,
-    roots: Option<&AllowedRoots>,
+    roots: &AllowedRoots,
 ) -> Vec<FileEntry> {
     let mut entries = Vec::new();
 
-    let mut builder = WalkBuilder::new(path);
-    builder
-        // 隠しファイルの表示可否はフロントエンドの設定で切り替えるため、ここでは除外しない
-        .hidden(false)
-        .max_depth(Some(1))
-        .git_ignore(respect_gitignore)
-        .git_global(respect_gitignore)
-        .git_exclude(respect_gitignore)
-        .ignore(respect_gitignore)
-        // 親ディレクトリを遡って.gitignoreを探索する（サブフォルダの遅延取得時に必要）
-        .parents(respect_gitignore);
-
-    for entry in builder.build().flatten().take(MAX_DIRECTORY_ENTRIES) {
+    // 隠しファイルの表示可否はフロントエンドで切り替える。
+    let walk = walk_entries(path, roots, true, respect_gitignore, Some(1));
+    for entry in walk.flatten().take(MAX_DIRECTORY_ENTRIES) {
         // depth 0 は走査起点のディレクトリ自身なのでスキップ
         if entry.depth() == 0 {
             continue;
         }
-        if roots.is_some_and(|r| r.resolve(&entry.path().to_string_lossy()).is_err()) {
+        if roots.resolve(&entry.path().to_string_lossy()).is_err() {
             continue;
         }
         let is_dir = entry.file_type().is_some_and(|t| t.is_dir());

@@ -233,7 +233,7 @@ impl AllowedRoots {
         self.resolve_opened_path(canonicalize(&input)?)
     }
 
-    fn share_checked_input<'a>(&self, path: &'a str) -> Result<Cow<'a, Path>, String> {
+    pub(super) fn share_checked_input<'a>(&self, path: &'a str) -> Result<Cow<'a, Path>, String> {
         Ok(match WindowsSharePath::from_input(path)? {
             Some(share) if self.share_path_is_trusted(&share) => Cow::Owned(share.as_path()),
             Some(_) => return Err("共有パスへのアクセスが許可されていません".into()),
