@@ -1,7 +1,8 @@
 use super::normalize_path_for_display;
 use super::persistent_trust::{persist_explorer_root, PersistentExplorerRoot};
-use super::trusted_paths::AllowedRoots;
+use super::trusted_paths::{dangerous_root_reason, AllowedRoots, ShareQuery};
 use crate::commands::has_markdown_extension;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
@@ -29,6 +30,63 @@ impl Drop for NativeDialogGuard<'_> {
     }
 }
 
+enum ShareGrant {
+    Folder,
+    FolderOrContainingFolder,
+    Archive,
+}
+
+fn confirm_share_query(app: &AppHandle, path: &Path, grant: ShareGrant) -> bool {
+    let path = normalize_path_for_display(path);
+    let locale = crate::menu::resolve_locale(app);
+    let (title, prompt) = if locale == "ja" {
+        let scope = match grant {
+            ShareGrant::Folder => "このフォルダー内のファイル",
+            ShareGrant::FolderOrContainingFolder => {
+                "フォルダー（ファイルを指定した場合はその親フォルダー）内のファイル"
+            }
+            ShareGrant::Archive => "このアーカイブファイル",
+        };
+        (
+            "ネットワーク共有への接続確認",
+            format!("Windows が次のネットワーク共有パスに接続することを許可しますか？\n許可すると、{scope}にアクセスできます。\n\n{path}"),
+        )
+    } else {
+        let scope = match grant {
+            ShareGrant::Folder => "files in this folder",
+            ShareGrant::FolderOrContainingFolder => {
+                "files in the folder (or the containing folder for a file)"
+            }
+            ShareGrant::Archive => "this archive file",
+        };
+        (
+            "Confirm network share access",
+            format!("Allow Windows to connect to this network path?\nThis grants access to {scope}.\n\n{path}"),
+        )
+    };
+    app.dialog()
+        .message(prompt)
+        .title(title)
+        .buttons(MessageDialogButtons::YesNo)
+        .blocking_show()
+}
+
+fn query_share_authorization<'a>(
+    state: &AllowedRoots,
+    app: &AppHandle,
+    dialogs: &'a NativeDialogState,
+    path: &str,
+    grant: ShareGrant,
+) -> Result<(ShareQuery, Option<NativeDialogGuard<'a>>), String> {
+    // Keep the native dialog slot through registration and any persistent update.
+    let mut guard = None;
+    let query = state.query_share(path, |target| {
+        guard = Some(dialogs.try_acquire()?);
+        Ok(confirm_share_query(app, target, grant))
+    })?;
+    Ok((query, guard))
+}
+
 /// 未認可のパスについてネイティブ確認を表示し、承認された場合だけ信頼登録する。
 /// WebViewはこの確認を迂回して信頼範囲を拡張できない。
 #[tauri::command]
@@ -38,6 +96,22 @@ pub async fn authorize_path(
     state: State<'_, AllowedRoots>,
     dialogs: State<'_, NativeDialogState>,
 ) -> Result<bool, String> {
+    let (share, _share_guard) = query_share_authorization(
+        &state,
+        &app,
+        &dialogs,
+        &path,
+        ShareGrant::FolderOrContainingFolder,
+    )?;
+    match share {
+        ShareQuery::Declined => return Ok(false),
+        ShareQuery::Trusted(_) => return Ok(true),
+        ShareQuery::Confirmed(canonical) => {
+            state.register_root_path(AllowedRoots::root_for_canonical_path(canonical)?);
+            return Ok(true);
+        }
+        ShareQuery::Local => {}
+    }
     if state.is_allowed(&path) {
         return Ok(true);
     }
@@ -81,6 +155,20 @@ pub async fn authorize_archive_path(
     state: State<'_, AllowedRoots>,
     dialogs: State<'_, NativeDialogState>,
 ) -> Result<bool, String> {
+    let (share, _share_guard) =
+        query_share_authorization(&state, &app, &dialogs, &path, ShareGrant::Archive)?;
+    match share {
+        ShareQuery::Declined => return Ok(false),
+        ShareQuery::Trusted(canonical) => {
+            AllowedRoots::validate_canonical_zip_file(canonical)?;
+            return Ok(true);
+        }
+        ShareQuery::Confirmed(canonical) => {
+            state.register_canonical_file(AllowedRoots::validate_canonical_zip_file(canonical)?);
+            return Ok(true);
+        }
+        ShareQuery::Local => {}
+    }
     let archive = AllowedRoots::canonical_zip_file_path(&path)?;
     if state.is_allowed(&archive.to_string_lossy()) {
         return Ok(true);
@@ -125,11 +213,27 @@ pub async fn authorize_folder_path(
     persistent: State<'_, PersistentExplorerRoot>,
     dialogs: State<'_, NativeDialogState>,
 ) -> Result<bool, String> {
-    let root = AllowedRoots::root_for_path(&path)?;
+    let (share, _share_guard) =
+        query_share_authorization(&state, &app, &dialogs, &path, ShareGrant::Folder)?;
+    let (root, confirmed) = match share {
+        ShareQuery::Declined => return Ok(false),
+        ShareQuery::Local => (AllowedRoots::root_for_path(&path)?, false),
+        ShareQuery::Trusted(canonical) => (canonical, false),
+        ShareQuery::Confirmed(canonical) => (canonical, true),
+    };
     if !root.is_dir() {
         return Err("フォルダーを指定してください".to_string());
     }
+    if let Some(reason) = dangerous_root_reason(&root) {
+        return Err(reason.to_string());
+    }
     if persistent.matches(&root) {
+        return Ok(true);
+    }
+
+    if confirmed {
+        state.register_root_path(root.clone());
+        persist_explorer_root(&app, &persistent, &root)?;
         return Ok(true);
     }
 

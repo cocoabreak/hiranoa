@@ -31,7 +31,6 @@
     approveLargeMarkdownFullRender,
     openMarkdownFile,
     openSourceMarkdown,
-    resolveLocalPath,
   } from "$lib/actions/file-actions";
   import { authorizePath } from "$lib/actions/security";
   import { showViewerContextMenu } from "$lib/actions/context-menu";
@@ -59,7 +58,12 @@
     approveExternalImagesForDocument,
     areExternalImagesApprovedForDocument,
   } from "$lib/stores/external-image-permission";
-  import { documentKey, nativeDocumentPath, resolveDocumentTarget } from "$lib/document-sources";
+  import {
+    documentKey,
+    nativeDocumentPath,
+    resolveDocumentTarget,
+    resolveLocalPath,
+  } from "$lib/document-sources";
   import type { DocumentRef } from "$lib/types";
   import {
     sessionUiStateStore,

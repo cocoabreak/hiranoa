@@ -1,4 +1,6 @@
+use super::windows_share::WindowsSharePath;
 use crate::commands::has_markdown_extension;
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Component, Path, PathBuf};
@@ -6,6 +8,17 @@ use std::sync::{Arc, Mutex};
 use tauri::State;
 
 pub const MAX_INPUT_PATHS: usize = 32;
+
+pub(super) enum ShareQuery {
+    Local,
+    Declined,
+    Trusted(PathBuf),
+    Confirmed(PathBuf),
+}
+
+fn canonicalize_path(path: &Path) -> Result<PathBuf, String> {
+    std::fs::canonicalize(path).map_err(|error| format!("パスの解決に失敗しました: {error}"))
+}
 
 /// ユーザーが明示的に許可したフォルダールートと単一ファイルの集合。
 /// 全ファイルアクセスはルート配下、または単一ファイルとの完全一致に限定される。
@@ -28,8 +41,10 @@ impl AllowedRoots {
     /// pathを信頼済みルートとして登録する。pathがファイルの場合はその親フォルダを登録する。
     /// 危険なフォルダ（ドライブ直下・システムフォルダ・ユーザープロファイル直下）は拒否する。
     pub(super) fn root_for_path(path: &str) -> Result<PathBuf, String> {
-        let canonical =
-            std::fs::canonicalize(path).map_err(|e| format!("パスの解決に失敗しました: {}", e))?;
+        Self::root_for_canonical_path(canonicalize_path(Path::new(path))?)
+    }
+
+    pub(super) fn root_for_canonical_path(canonical: PathBuf) -> Result<PathBuf, String> {
         let root = if canonical.is_dir() {
             canonical
         } else {
@@ -61,8 +76,10 @@ impl AllowedRoots {
     }
 
     pub(super) fn canonical_zip_file_path(path: &str) -> Result<PathBuf, String> {
-        let canonical =
-            std::fs::canonicalize(path).map_err(|e| format!("パスの解決に失敗しました: {e}"))?;
+        Self::validate_canonical_zip_file(canonicalize_path(Path::new(path))?)
+    }
+
+    pub(super) fn validate_canonical_zip_file(canonical: PathBuf) -> Result<PathBuf, String> {
         if !canonical.is_file() {
             return Err("ファイルを指定してください".to_string());
         }
@@ -79,7 +96,7 @@ impl AllowedRoots {
     /// ZIP単体だけを信頼対象として登録する。canonicalize後の実体もZIPでなければ拒否する。
     pub(crate) fn register_zip_file(&self, path: &str) -> Result<(), String> {
         let canonical = Self::canonical_zip_file_path(path)?;
-        self.0.lock().unwrap().files.insert(canonical);
+        self.register_canonical_file(canonical);
         Ok(())
     }
 
@@ -93,23 +110,80 @@ impl AllowedRoots {
         if current != expected {
             return Err("確認中にアーカイブファイルの参照先が変更されました".to_string());
         }
-        self.0.lock().unwrap().files.insert(current);
+        self.register_canonical_file(current);
         Ok(())
+    }
+
+    pub(super) fn register_canonical_file(&self, canonical: PathBuf) {
+        self.0.lock().unwrap().files.insert(canonical);
+    }
+
+    fn share_path_is_trusted(&self, candidate: &WindowsSharePath) -> bool {
+        let entries = self.0.lock().unwrap();
+        if entries
+            .files
+            .iter()
+            .any(|file| candidate.matches_path(file))
+        {
+            return true;
+        }
+        entries.roots.iter().any(|root| {
+            root.to_str()
+                .and_then(|path| WindowsSharePath::from_input(path).ok().flatten())
+                .is_some_and(|root| root.contains(candidate))
+        })
+    }
+
+    pub(super) fn query_share(
+        &self,
+        path: &str,
+        confirm: impl FnOnce(&Path) -> Result<bool, String>,
+    ) -> Result<ShareQuery, String> {
+        self.query_share_with(path, confirm, canonicalize_path)
+    }
+
+    fn query_share_with(
+        &self,
+        path: &str,
+        confirm: impl FnOnce(&Path) -> Result<bool, String>,
+        canonicalize: impl FnOnce(&Path) -> Result<PathBuf, String>,
+    ) -> Result<ShareQuery, String> {
+        let Some(share) = WindowsSharePath::from_input(path)? else {
+            return Ok(ShareQuery::Local);
+        };
+        let requested = share.as_path();
+        if self.share_path_is_trusted(&share) {
+            return self
+                .resolve_opened_path(canonicalize(&requested)?)
+                .map(ShareQuery::Trusted);
+        }
+        if !confirm(&requested)? {
+            return Ok(ShareQuery::Declined);
+        }
+        let canonical = canonicalize(&requested)?;
+        if !share.matches_path(&canonical) {
+            return Err("共有パスの解決先が確認したパスと一致しません".into());
+        }
+        Ok(ShareQuery::Confirmed(canonical))
     }
 
     /// pathをcanonicalizeし、信頼済みルートのいずれかの配下にあることを検証する。
     /// シンボリックリンクは解決済みのパスで判定するため、リンク経由の脱出も防ぐ。
     pub(crate) fn resolve(&self, path: &str) -> Result<PathBuf, String> {
-        let canonical =
-            std::fs::canonicalize(path).map_err(|e| format!("パスの解決に失敗しました: {}", e))?;
-        let entries = self.0.lock().unwrap();
-        if entries.files.contains(&canonical)
-            || entries.roots.iter().any(|root| canonical.starts_with(root))
-        {
-            Ok(canonical)
-        } else {
-            Err("許可されていないファイルです".to_string())
-        }
+        self.resolve_with(path, canonicalize_path)
+    }
+
+    fn resolve_with(
+        &self,
+        path: &str,
+        canonicalize: impl FnOnce(&Path) -> Result<PathBuf, String>,
+    ) -> Result<PathBuf, String> {
+        let input = match WindowsSharePath::from_input(path)? {
+            Some(share) if self.share_path_is_trusted(&share) => Cow::Owned(share.as_path()),
+            Some(_) => return Err("共有パスへのアクセスが許可されていません".into()),
+            None => Cow::Borrowed(Path::new(path)),
+        };
+        self.resolve_opened_path(canonicalize(&input)?)
     }
 
     pub(super) fn resolve_opened_path(&self, canonical: PathBuf) -> Result<PathBuf, String> {
@@ -275,4 +349,152 @@ pub(super) fn final_path_for_file(file: &File) -> Result<PathBuf, String> {
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 pub(super) fn final_path_for_file(_file: &File) -> Result<PathBuf, String> {
     Err("このOSでは安全なファイル読込を利用できません".to_string())
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const SHARED_FILE: &str = r"\\fileserver\team\docs\notes.md";
+    const CANONICAL_FILE: &str = r"\\?\UNC\fileserver\team\docs\notes.md";
+
+    #[test]
+    fn untrusted_share_is_not_queried_by_reads_or_after_declining() {
+        let roots = AllowedRoots::new();
+        for path in [
+            SHARED_FILE,
+            "//fileserver/team/docs/notes.md",
+            CANONICAL_FILE,
+        ] {
+            assert!(roots
+                .resolve_with(path, |_| panic!("untrusted share reached the filesystem"))
+                .is_err());
+
+            let prompted = Cell::new(false);
+            let outcome = roots
+                .query_share_with(
+                    path,
+                    |target| {
+                        assert_eq!(target, Path::new(CANONICAL_FILE));
+                        prompted.set(true);
+                        Ok(false)
+                    },
+                    |_| panic!("declined share reached the filesystem"),
+                )
+                .unwrap();
+            assert!(prompted.get());
+            assert!(matches!(outcome, ShareQuery::Declined));
+        }
+    }
+
+    #[test]
+    fn approved_folder_queries_without_prompting_again() {
+        let roots = AllowedRoots::new();
+        let confirmed = Cell::new(false);
+        let outcome = roots
+            .query_share_with(
+                SHARED_FILE,
+                |_| {
+                    confirmed.set(true);
+                    Ok(true)
+                },
+                |target| {
+                    assert!(confirmed.get());
+                    Ok(target.to_path_buf())
+                },
+            )
+            .unwrap();
+        let ShareQuery::Confirmed(file) = outcome else {
+            panic!("expected share consent");
+        };
+        roots.register_root_path(file.parent().unwrap().to_path_buf());
+
+        let file = roots
+            .resolve_with("//FILESERVER/team/docs/notes.md", |_| {
+                Ok(PathBuf::from(CANONICAL_FILE))
+            })
+            .unwrap();
+        assert_eq!(file, Path::new(CANONICAL_FILE));
+        assert!(matches!(
+            roots
+                .query_share_with(
+                    SHARED_FILE,
+                    |_| panic!("approved share prompted again"),
+                    |target| Ok(target.to_path_buf())
+                )
+                .unwrap(),
+            ShareQuery::Trusted(_)
+        ));
+        for path in [
+            "//fileserver/team/docs-archive/notes.md",
+            "//fileserver/team/docs/../other/notes.md",
+            "//fileserver/team/DOCS/notes.md",
+            "//fileserver/other/docs/notes.md",
+        ] {
+            assert!(roots
+                .resolve_with(path, |_| panic!("share path outside the approved folder"))
+                .is_err());
+        }
+    }
+
+    #[test]
+    fn share_consent_only_grants_the_address_shown() {
+        let roots = AllowedRoots::new();
+        assert!(roots
+            .query_share_with(
+                SHARED_FILE,
+                |_| Ok(true),
+                |_| Ok(PathBuf::from(r"\\?\UNC\fileserver\other\docs\notes.md"))
+            )
+            .is_err());
+    }
+
+    #[test]
+    fn a_trusted_archive_does_not_preapprove_its_folder_or_siblings() {
+        let roots = AllowedRoots::new();
+        let archive = PathBuf::from(r"\\?\UNC\fileserver\team\docs\notes.zip");
+        roots.register_canonical_file(archive.clone());
+        assert_eq!(
+            roots
+                .resolve_with("//fileserver/team/docs/notes.zip", |path| Ok(
+                    path.to_path_buf()
+                ))
+                .unwrap(),
+            archive
+        );
+        assert!(roots
+            .resolve_with(SHARED_FILE, |_| panic!(
+                "archive trust escaped to a sibling"
+            ))
+            .is_err());
+        assert!(roots
+            .resolve_with("//fileserver/team/docs/NOTES.ZIP", |_| {
+                panic!("a differently cased archive may be a separate file")
+            })
+            .is_err());
+    }
+
+    #[test]
+    fn local_path_uses_existing_resolution() {
+        let roots = AllowedRoots::new();
+        let temp = tempfile::tempdir().unwrap();
+        let file = temp.path().join("notes.md");
+        std::fs::write(&file, "local Markdown").unwrap();
+        roots.register(&file.to_string_lossy()).unwrap();
+        assert_eq!(
+            roots.resolve(&file.to_string_lossy()).unwrap(),
+            std::fs::canonicalize(&file).unwrap()
+        );
+        assert!(matches!(
+            roots
+                .query_share_with(
+                    &file.to_string_lossy(),
+                    |_| panic!("local path used the share prompt"),
+                    |_| panic!("local path used the share resolver")
+                )
+                .unwrap(),
+            ShareQuery::Local
+        ));
+    }
 }

@@ -16,7 +16,7 @@ import { recentStore } from "$lib/stores/recent.svelte";
 import { settingsStore } from "$lib/stores/settings.svelte";
 import { saveRecent } from "$lib/recent-store";
 import { i18n } from "$lib/i18n/index.svelte";
-import { basename, normalizePath } from "$lib/utils";
+import { basename } from "$lib/utils";
 import type { DocumentRef, DocumentSourceInfo } from "$lib/types";
 import {
   displayDocumentPath,
@@ -207,34 +207,6 @@ export async function openSourceMarkdown(
         source.kind === "zip" ? source.id : undefined
       );
   }
-}
-
-/** ローカルリンクの相対パスを現在ファイルのパスを基準に解決する */
-export function resolveLocalPath(currentFilePath: string, href: string): string {
-  const normalized = normalizePath(href);
-
-  // 絶対パス（Unix: /foo, Windows: C:/foo）
-  if (normalized.startsWith("/") || normalized.match(/^[A-Za-z]:\//)) {
-    return normalized;
-  }
-
-  const dir = normalizePath(currentFilePath).split("/").slice(0, -1);
-  const parts = [...dir, ...normalized.split("/")];
-  const resolved: string[] = [];
-
-  for (const part of parts) {
-    if (part === "..") {
-      resolved.pop();
-    } else if (part !== "." && part !== "") {
-      resolved.push(part);
-    }
-  }
-
-  const first = resolved[0];
-  if (first?.match(/^[A-Za-z]:$/)) {
-    return first + "/" + resolved.slice(1).join("/");
-  }
-  return "/" + resolved.join("/");
 }
 
 /** 外部のデフォルトエディター（VS Codeなど）でファイルを開く */
