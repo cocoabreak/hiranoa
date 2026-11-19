@@ -65,6 +65,7 @@ pub fn run() {
             let locale = menu::resolve_locale(app.handle());
             let menu = menu::build_menu(app.handle(), &locale)?;
             app.set_menu(menu)?;
+            commands::window::create_main_window(app.handle())?;
             Ok(())
         })
         .on_menu_event(menu::handle_menu_event)

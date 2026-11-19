@@ -1,7 +1,10 @@
 use std::{collections::HashSet, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{
+    webview::NewWindowResponse, AppHandle, Emitter, Manager, State, Url, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder,
+};
 
 use super::{
     file::AllowedRoots,
@@ -12,7 +15,74 @@ use super::{
 
 pub(crate) const LINK_GRAPH_WINDOW_LABEL: &str = "link-graph";
 pub(crate) const MAIN_WINDOW_LABEL: &str = "main";
+const LINK_GRAPH_ROUTE: &str = "link-graph";
 const LINK_GRAPH_OPEN_DOCUMENT_EVENT: &str = "link-graph-open-document";
+
+fn app_base_url(app: &AppHandle, use_https_scheme: bool) -> Url {
+    if tauri::is_dev() {
+        if let Some(url) = &app.config().build.dev_url {
+            return url.clone();
+        }
+    }
+
+    // Match Tauri's embedded asset URL, including WebView2's HTTPS option.
+    let url = if cfg!(any(windows, target_os = "android")) {
+        if use_https_scheme {
+            "https://tauri.localhost/"
+        } else {
+            "http://tauri.localhost/"
+        }
+    } else {
+        "tauri://localhost"
+    };
+    Url::parse(url).expect("valid embedded asset URL")
+}
+
+fn window_page_url(url: &Url) -> &str {
+    let page = url
+        .as_str()
+        .split_once('#')
+        .map_or(url.as_str(), |(page, _)| page);
+    if url.path() == "/" && url.query().is_none() {
+        // The embedded custom scheme can represent its root with or without a slash.
+        page.trim_end_matches('/')
+    } else {
+        page
+    }
+}
+
+fn allows_window_navigation(url: &Url, page: &Url) -> bool {
+    // WebKit also calls the navigation handler for the isolated Mermaid iframe.
+    // WebView2 reports only main-frame navigation here.
+    (!cfg!(windows) && url.as_str() == "about:srcdoc")
+        || window_page_url(url) == window_page_url(page)
+}
+
+fn restrict_navigation<'a>(
+    builder: WebviewWindowBuilder<'a, tauri::Wry, AppHandle>,
+    page: Url,
+) -> WebviewWindowBuilder<'a, tauri::Wry, AppHandle> {
+    builder
+        .on_navigation(move |url| allows_window_navigation(url, &page))
+        .on_new_window(|_, _| NewWindowResponse::Deny)
+}
+
+pub(crate) fn create_main_window(app: &AppHandle) -> tauri::Result<()> {
+    // The config keeps window properties; setup attaches the guard before creation.
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == MAIN_WINDOW_LABEL)
+        .expect("main window config");
+    restrict_navigation(
+        WebviewWindowBuilder::from_config(app, config)?,
+        app_base_url(app, config.use_https_scheme),
+    )
+    .build()?;
+    Ok(())
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -124,17 +194,21 @@ pub async fn open_link_graph_window(app: AppHandle, window: WebviewWindow) -> Re
         return Ok(());
     }
 
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         &app,
         LINK_GRAPH_WINDOW_LABEL,
-        WebviewUrl::App("link-graph".into()),
+        WebviewUrl::App(LINK_GRAPH_ROUTE.into()),
     )
     .title("Hiranoa - Link Graph")
     .inner_size(900.0, 650.0)
     .min_inner_size(520.0, 360.0)
-    .resizable(true)
-    .build()
-    .map_err(|error| error.to_string())?;
+    .resizable(true);
+    let page = app_base_url(&app, false)
+        .join(LINK_GRAPH_ROUTE)
+        .expect("valid link graph route");
+    let window = restrict_navigation(builder, page)
+        .build()
+        .map_err(|error| error.to_string())?;
     window.remove_menu().map_err(|error| error.to_string())?;
     Ok(())
 }
@@ -273,11 +347,36 @@ pub fn request_link_graph_document_open(
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_context_update, begin_context_session, LinkGraphWindowContext,
-        LinkGraphWindowContextUpdate, LinkGraphWindowState, LinkGraphWindowStateInner,
+        allows_window_navigation, apply_context_update, begin_context_session,
+        LinkGraphWindowContext, LinkGraphWindowContextUpdate, LinkGraphWindowState,
+        LinkGraphWindowStateInner, Url,
     };
     use crate::commands::sources::DocumentRef;
     use std::sync::Mutex;
+
+    #[test]
+    fn window_page_allows_only_the_configured_page_and_its_fragments() {
+        let root = Url::parse("tauri://localhost").unwrap();
+        let root_fragment = Url::parse("tauri://localhost/#heading").unwrap();
+        assert!(allows_window_navigation(&root_fragment, &root));
+
+        let root = Url::parse("http://tauri.localhost/").unwrap();
+        for other_page in [
+            "https://tauri.localhost/",
+            "http://tauri.localhost:1420/",
+            "http://tauri.localhost/link-graph",
+            "http://tauri.localhost/?view=graph",
+            "http://tauri.localhost.example.invalid/",
+        ] {
+            let other_page = Url::parse(other_page).unwrap();
+            assert!(!allows_window_navigation(&other_page, &root));
+        }
+        let mermaid_frame = Url::parse("about:srcdoc").unwrap();
+        assert_eq!(
+            allows_window_navigation(&mermaid_frame, &root),
+            !cfg!(windows)
+        );
+    }
 
     #[test]
     fn older_context_cannot_overwrite_newer_context_and_reload_starts_a_new_session() {

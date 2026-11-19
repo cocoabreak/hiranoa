@@ -26,6 +26,7 @@
     navigateOpenedAnchor,
   } from "$lib/actions/workspace-actions";
   import { buildToc, scrollToAnchor } from "$lib/markdown/toc-dom";
+  import { interceptPreviewLink } from "$lib/markdown/preview-links";
   import { applyIntrinsicImageSize, hydrateLocalImages } from "$lib/markdown/local-images";
   import {
     approveLargeMarkdownFullRender,
@@ -642,15 +643,8 @@
 
   // リンクのクリックをインターセプト
   async function handleClick(event: MouseEvent, forceOther = false) {
-    const target = event.target as HTMLElement;
-
-    const anchor = target.closest("a");
-    if (!anchor) return;
-
-    const href = anchor.getAttribute("href");
+    const href = interceptPreviewLink(event);
     if (!href) return;
-
-    event.preventDefault();
 
     if (href.startsWith("http://") || href.startsWith("https://")) {
       openUrl(href);
@@ -843,6 +837,7 @@
     class:selectable-content={!isLoading && !!activeContent}
     style="scrollbar-gutter: stable; font-size: {settingsStore.settings.contentZoom}%"
     onclick={handleClick}
+    onauxclick={interceptPreviewLink}
     oncontextmenu={handleContextMenu}
     onscroll={handleScroll}
     onwheel={handleWheel}

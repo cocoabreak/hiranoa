@@ -45,7 +45,7 @@ function git(...args) {
 }
 function markdown(timeout, extra) {
   return (
-    `---\ntitle: Guide\n---\n# Connection guide\n\nTimeout: ${timeout} seconds.\n\n${extra}\n\n![Versioned image](assets/example.svg)\n\n\`\`\`mermaid\ngraph LR\n  A[Start] --> B[Done]\n\`\`\`\n\nMath: $\\frac{1}{2}$.\n\n` +
+    `---\ntitle: Guide\n---\n# Connection guide\n\nTimeout: ${timeout} seconds.\n\n${extra}\n\n[Jump to last step](#step-34) · [Other document](../secret.md)\n\n![Versioned image](assets/example.svg)\n\n\`\`\`mermaid\ngraph LR\n  A[Start] --> B[Done]\n\`\`\`\n\nMath: $\\frac{1}{2}$.\n\n` +
     '\n```mermaid\n%%{init: {"themeCSS":".node rect {fill:url(https://example.invalid/history-probe.svg)}"}}%%\nflowchart TD\nA[probe]\n```\n\n' +
     Array.from({ length: 35 }, (_, i) => `## Step ${i}\n\nRead section ${i}.\n`).join("\n") +
     `\nRead [options][ref] and this note[^note].\n\n[ref]: https://example.invalid/${timeout}\n\n[^note]: Timeout note ${timeout}.\n`
@@ -191,6 +191,29 @@ try {
     requests.some((url) => url.includes("history-probe.svg")),
     false
   );
+  const appPage = await evaluate("location.href");
+  assert.deepEqual(
+    await evaluate(`Array.from(document.querySelectorAll('.history-document'), root => ({
+      local: Array.from(root.querySelectorAll('a')).find(link => link.textContent === 'Other document')?.getAttribute('href'),
+      external: Array.from(root.querySelectorAll('a')).find(link => link.textContent === 'options')?.getAttribute('href'),
+    }))`),
+    [
+      { local: null, external: null },
+      { local: null, external: null },
+    ]
+  );
+  const historyAnchor = '.history-document a[href="#step-34"]';
+  assert.equal(await driver.click(historyAnchor), "OK");
+  await driver.waitFor("document.querySelector('.history-pane').scrollTop > 1000");
+  assert.equal(await evaluate("location.href"), appPage);
+  assert.equal(
+    await evaluate(`document.querySelector(${JSON.stringify(historyAnchor)}).dispatchEvent(
+      new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 })
+    )`),
+    false
+  );
+  await evaluate(`document.querySelectorAll('.history-pane').forEach(pane => pane.scrollTop = 0)`);
+  globalThis.console.log("PASS history anchors stay in the comparison; other links are disabled");
   await driver.screenshot(path.join(artifacts, "visual-diff.png"));
   const initialBand = await evaluate(
     `document.querySelector('.history-gutter path').getAttribute('d')`

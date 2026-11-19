@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { createMarkdownRenderSession, type RenderOptions } from "$lib/markdown/engine";
 import { protectExternalImages } from "$lib/markdown/external-images";
+import { interceptPreviewLink, PREVIEW_LINK_SELECTOR } from "$lib/markdown/preview-links";
 import { buildToc, scrollToAnchor } from "$lib/markdown/toc-dom";
 import { namespaceViewDom } from "$lib/markdown/view-dom";
 import { viewerPlugins } from "$lib/plugins";
@@ -14,8 +15,9 @@ export function protectHistoryResources(html: string): {
 } {
   const template = document.createElement("template");
   template.innerHTML = protectExternalImages(html).html;
-  for (const anchor of template.content.querySelectorAll("a[href]")) {
-    if (!anchor.getAttribute("href")?.startsWith("#")) anchor.removeAttribute("href");
+  for (const link of template.content.querySelectorAll(PREVIEW_LINK_SELECTOR)) {
+    if (!link.getAttribute("href")?.startsWith("#")) link.removeAttribute("href");
+    link.removeAttribute("xlink:href");
   }
   const images: { id: string; target: string }[] = [];
   for (const image of template.content.querySelectorAll<HTMLImageElement>("img")) {
@@ -110,14 +112,15 @@ export function createHistoryRenderer() {
     namespaceViewDom(root, `view-${scope}`);
     root.querySelectorAll<HTMLInputElement>("input").forEach((input) => (input.disabled = true));
     const click = (event: MouseEvent) => {
-      const anchor = (event.target as Element).closest("a");
-      if (!anchor) return;
-      event.preventDefault();
-      const href = anchor.getAttribute("href");
+      const href = interceptPreviewLink(event);
       if (href?.startsWith("#")) scrollToAnchor(root, href.slice(1));
     };
     root.addEventListener("click", click);
-    cleanup.push(() => root.removeEventListener("click", click));
+    root.addEventListener("auxclick", interceptPreviewLink);
+    cleanup.push(() => {
+      root.removeEventListener("click", click);
+      root.removeEventListener("auxclick", interceptPreviewLink);
+    });
     for (const plugin of viewerPlugins) {
       if (!plugin.postRender) continue;
       try {
