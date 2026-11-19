@@ -59,6 +59,26 @@ describe("wiki-linksプラグインのパース", () => {
     expect(md.render("```\n[[Setup]]\n```")).not.toContain("wiki-link");
   });
 
+  it("不成立な候補の後も有効なWikiリンクとMarkdownリンクを描画する", () => {
+    const html = md.render(
+      "[[outer [[Setup#手順|手順へ]]]] [[broken] target]] \\[[Escaped]] [Manual](guide.md) [[#概要|概要へ]]"
+    );
+    const container = document.createElement("div");
+    container.innerHTML = html;
+    expect(
+      [...container.querySelectorAll("a")].map((anchor) => [
+        anchor.textContent,
+        anchor.getAttribute("data-wiki-target"),
+        anchor.getAttribute("data-wiki-hash"),
+        anchor.getAttribute("href"),
+      ])
+    ).toEqual([
+      ["手順へ", "Setup", "手順", null],
+      ["Manual", null, null, "guide.md"],
+      ["概要へ", null, null, "#概要"],
+    ]);
+  });
+
   it("表示テキスト・属性値はエスケープされる", () => {
     const html = md.render('[[a"b|<x>]]');
     expect(html).toContain("&quot;");

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
+use std::ops::Range;
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -1977,7 +1978,28 @@ fn is_absolute_link_target(target: &str) -> bool {
             .is_some_and(|byte| *byte == b':')
 }
 
-fn extract_wiki_links(raw: &str, limit: usize) -> (Vec<ExtractedDocumentLink>, bool) {
+fn next_wiki_link_range(raw: &str, offset: &mut usize) -> Option<Range<usize>> {
+    let mut start = *offset + raw[*offset..].find("[[")?;
+    let mut position = start + 2;
+    let bytes = raw.as_bytes();
+    while position + 1 < bytes.len() {
+        match (bytes[position], bytes[position + 1]) {
+            (b'[', b'[') => {
+                // Recover at the next non-overlapping opener without re-reading the suffix.
+                start = position;
+                position += 2;
+            }
+            (b']', b']') => {
+                *offset = position + 2;
+                return Some(start..*offset);
+            }
+            _ => position += 1,
+        }
+    }
+    None
+}
+
+fn wiki_link_excluded_ranges(raw: &str) -> Vec<Range<usize>> {
     let mut excluded_ranges = Vec::new();
     let mut code_block_start = None;
     for (event, range) in Parser::new(raw).into_offset_iter() {
@@ -1999,72 +2021,69 @@ fn extract_wiki_links(raw: &str, limit: usize) -> (Vec<ExtractedDocumentLink>, b
         excluded_ranges.push(start..raw.len());
     }
     excluded_ranges.sort_by_key(|range| range.start);
+    excluded_ranges
+}
 
-    let mut targets = Vec::new();
-    let mut truncated = false;
-    let mut offset = 0;
+fn wiki_link_contents(raw: &str) -> impl Iterator<Item = &str> + '_ {
+    let first = raw.find("[[");
+    // Ordinary Markdown without a Wiki opener needs no exclusion scan.
+    let excluded_ranges = first.map_or_else(Vec::new, |_| wiki_link_excluded_ranges(raw));
+    let mut offset = first.unwrap_or(raw.len());
     let mut excluded_index = 0;
-    while offset < raw.len() {
-        let Some(relative_start) = raw[offset..].find("[[") else {
-            break;
-        };
-        let start = offset + relative_start;
-        let Some(relative_end) = raw[start + 2..].find("]]") else {
-            break;
-        };
-        let end = start + 2 + relative_end;
-        let candidate_end = end + 2;
-        while excluded_ranges
-            .get(excluded_index)
-            .is_some_and(|range| range.end <= start)
-        {
-            excluded_index += 1;
-        }
-        let in_code = excluded_ranges
-            .get(excluded_index)
-            .is_some_and(|range| range.start < candidate_end && range.end > start);
-        let escaped = raw[..start]
-            .bytes()
-            .rev()
-            .take_while(|byte| *byte == b'\\')
-            .count()
-            % 2
-            == 1;
-        let inner = &raw[start + 2..end];
-        if inner.contains("[[") {
-            // 不成立な外側の開始記号で、内側にある有効なWikiリンクまで
-            // 飲み込まないよう、次の開始記号を再探索する。
-            offset = start + 2;
-            continue;
-        }
-        if !in_code
-            && !escaped
-            && !inner.trim().is_empty()
-            && !inner.contains(']')
-            && !inner.contains('\n')
-        {
-            let raw_target = inner.split_once('|').map_or(inner, |(target, _)| target);
-            if let Some((target, anchor)) = split_link_target(raw_target) {
-                if is_absolute_link_target(&target) || has_uri_scheme(&target) {
-                    offset = candidate_end;
-                    continue;
-                }
-                if target.len() > super::wiki::MAX_WIKI_TARGET_BYTES {
-                    truncated = true;
-                    offset = candidate_end;
-                    continue;
-                }
-                if targets.len() >= limit {
-                    return (targets, true);
-                }
-                targets.push(ExtractedDocumentLink {
-                    raw_target: target,
-                    anchor,
-                    kind: DocumentLinkKind::Wiki,
-                });
+    std::iter::from_fn(move || {
+        while let Some(candidate) = next_wiki_link_range(raw, &mut offset) {
+            while excluded_ranges
+                .get(excluded_index)
+                .is_some_and(|range| range.end <= candidate.start)
+            {
+                excluded_index += 1;
+            }
+            if excluded_ranges
+                .get(excluded_index)
+                .is_some_and(|range| range.start < candidate.end)
+            {
+                continue;
+            }
+            let escaped = raw[..candidate.start]
+                .bytes()
+                .rev()
+                .take_while(|byte| *byte == b'\\')
+                .count()
+                % 2
+                == 1;
+            let inner = &raw[candidate.start + 2..candidate.end - 2];
+            if !escaped && !inner.contains([']', '\n']) {
+                return Some(inner);
             }
         }
-        offset = candidate_end;
+        None
+    })
+    .fuse()
+}
+
+fn extract_wiki_links(raw: &str, limit: usize) -> (Vec<ExtractedDocumentLink>, bool) {
+    let mut targets = Vec::new();
+    let mut truncated = false;
+    for inner in wiki_link_contents(raw) {
+        let raw_target = inner.split_once('|').map_or(inner, |(target, _)| target);
+        let Some((target, anchor)) = split_link_target(raw_target) else {
+            continue;
+        };
+        if is_absolute_link_target(&target) || has_uri_scheme(&target) {
+            continue;
+        }
+        if target.len() > super::wiki::MAX_WIKI_TARGET_BYTES {
+            truncated = true;
+            continue;
+        }
+        if targets.len() >= limit {
+            return (targets, true);
+        }
+        targets.push(ExtractedDocumentLink {
+            raw_target: target,
+            anchor,
+            kind: DocumentLinkKind::Wiki,
+        });
     }
     (targets, truncated)
 }
@@ -2174,71 +2193,22 @@ fn extract_same_document_wiki_anchors(
     raw: &str,
     limit: usize,
 ) -> (Vec<ExtractedDocumentLink>, bool) {
-    let mut excluded_ranges = Vec::new();
-    let mut code_block_start = None;
-    for (event, range) in Parser::new(raw).into_offset_iter() {
-        match event {
-            Event::Start(Tag::CodeBlock(_)) => code_block_start = Some(range.start),
-            Event::End(TagEnd::CodeBlock) => {
-                if let Some(start) = code_block_start.take() {
-                    excluded_ranges.push(start..range.end);
-                }
-            }
-            Event::Code(_) if code_block_start.is_none() => excluded_ranges.push(range),
-            Event::Html(_) | Event::InlineHtml(_) if code_block_start.is_none() => {
-                excluded_ranges.push(range)
-            }
-            _ => {}
-        }
-    }
-    if let Some(start) = code_block_start {
-        excluded_ranges.push(start..raw.len());
-    }
-
     let mut links = Vec::new();
-    let mut offset = 0;
-    while offset < raw.len() {
-        let Some(relative_start) = raw[offset..].find("[[") else {
-            break;
-        };
-        let start = offset + relative_start;
-        let Some(relative_end) = raw[start + 2..].find("]]") else {
-            break;
-        };
-        let end = start + 2 + relative_end;
-        let candidate_end = end + 2;
-        let escaped = raw[..start]
-            .bytes()
-            .rev()
-            .take_while(|byte| *byte == b'\\')
-            .count()
-            % 2
-            == 1;
-        let excluded = excluded_ranges
-            .iter()
-            .any(|range| range.start < candidate_end && range.end > start);
-        let inner = &raw[start + 2..end];
-        if inner.contains("[[") {
-            offset = start + 2;
-            continue;
-        }
+    for inner in wiki_link_contents(raw) {
         let target = inner
             .split_once('|')
             .map_or(inner, |(target, _)| target)
             .trim();
-        if !escaped && !excluded && !inner.contains(']') && !inner.contains('\n') {
-            if let Some(anchor) = target.strip_prefix('#').filter(|anchor| !anchor.is_empty()) {
-                if anchor.len() > super::wiki::MAX_WIKI_TARGET_BYTES || links.len() >= limit {
-                    return (links, true);
-                }
-                links.push(ExtractedDocumentLink {
-                    raw_target: String::new(),
-                    anchor: Some(anchor.to_string()),
-                    kind: DocumentLinkKind::Wiki,
-                });
+        if let Some(anchor) = target.strip_prefix('#').filter(|anchor| !anchor.is_empty()) {
+            if anchor.len() > super::wiki::MAX_WIKI_TARGET_BYTES || links.len() >= limit {
+                return (links, true);
             }
+            links.push(ExtractedDocumentLink {
+                raw_target: String::new(),
+                anchor: Some(anchor.to_string()),
+                kind: DocumentLinkKind::Wiki,
+            });
         }
-        offset = candidate_end;
     }
     (links, false)
 }
@@ -3958,6 +3928,31 @@ mod tests {
         assert!(!truncated);
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].anchor.as_deref(), Some("Valid"));
+    }
+
+    #[test]
+    fn wiki_index_keeps_link_order_and_excludes_code_html_and_escaped_links() {
+        let raw = concat!(
+            "[[Guide#Start|Guide]] [[invalid] suffix]] \\[[Ignored]] ",
+            "`[[#Inline]]` [[outer [[#Local|Here]]]]\n\n",
+            "<!-- [[#Comment]] [[Comment]] -->\n\n",
+            "```md\n[[InCode]] [[#AlsoInCode]]\n```\n\n",
+            "[[Other]] [[#Other section]]",
+        );
+        let (links, truncated) = extract_wiki_links(raw, 10);
+        assert!(!truncated);
+        assert_eq!(
+            links
+                .iter()
+                .map(|link| (link.raw_target.as_str(), link.anchor.as_deref()))
+                .collect::<Vec<_>>(),
+            [("Guide", Some("Start")), ("Other", None)]
+        );
+
+        let (anchors, truncated) = extract_same_document_wiki_anchors(raw, 1);
+        assert!(truncated);
+        assert_eq!(anchors.len(), 1);
+        assert_eq!(anchors[0].anchor.as_deref(), Some("Local"));
     }
 
     #[test]

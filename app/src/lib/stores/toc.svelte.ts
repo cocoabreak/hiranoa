@@ -1,17 +1,13 @@
 import { createPaneScopedStore } from "./workspace.svelte";
 import type { TocHeading } from "$lib/types";
-import { headingBaseId, uniqueHeadingId } from "$lib/markdown/heading-anchor";
+import { createHeadingIdAllocator, headingBaseId } from "$lib/markdown/heading-anchor";
 
 export function withReferenceHeadingIds(headings: TocHeading[]): TocHeading[] {
-  const usedIds = new Set<string>();
-  return headings.map((heading, index) => {
-    const referenceId = uniqueHeadingId(
-      headingBaseId(heading.anchorText ?? heading.text, index),
-      usedIds
-    );
-    usedIds.add(referenceId);
-    return { ...heading, referenceId };
-  });
+  const allocateId = createHeadingIdAllocator();
+  return headings.map((heading, index) => ({
+    ...heading,
+    referenceId: allocateId(headingBaseId(heading.anchorText ?? heading.text, index)),
+  }));
 }
 
 function createTocStore() {

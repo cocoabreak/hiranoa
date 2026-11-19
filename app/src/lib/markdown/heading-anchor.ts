@@ -74,11 +74,23 @@ export function headingBaseId(text: string, index: number): string {
   return slug ? Array.from(slug).slice(0, 60).join("") : `heading-${index}`;
 }
 
-export function uniqueHeadingId(base: string, usedIds: Set<string>): string {
-  let id = base;
-  let suffix = 1;
-  while (usedIds.has(id)) id = `${base}-${suffix++}`;
-  return id;
+/** Allocate IDs in document order, remembering the next suffix for each base. */
+export function createHeadingIdAllocator(): (base: string) => string {
+  const usedIds = new Set<string>();
+  const nextSuffixes = new Map<string, number>();
+
+  return (base) => {
+    let id = base;
+    if (usedIds.has(base)) {
+      let suffix = nextSuffixes.get(base) ?? 1;
+      do {
+        id = `${base}-${suffix++}`;
+      } while (usedIds.has(id));
+      nextSuffixes.set(base, suffix);
+    }
+    usedIds.add(id);
+    return id;
+  };
 }
 
 /** 実遷移と受動検証で共有する、見出しID・代替ID・正規化テキストの照合。 */

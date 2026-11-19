@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  createHeadingIdAllocator,
   decodeHeadingAnchor,
   headingBaseId,
   headingInlineCodeText,
   headingReferenceMatches,
   headingSlug,
-  uniqueHeadingId,
 } from "./heading-anchor";
 
 describe("heading anchor", () => {
@@ -32,9 +32,11 @@ describe("heading anchor", () => {
     expect(headingBaseId("😀".repeat(61), 0)).toBe("heading-0");
   });
 
-  it("重複IDへ連番を付ける", () => {
-    const used = new Set(["details", "details-1"]);
-    expect(uniqueHeadingId("details", used)).toBe("details-2");
+  it("既に使われた番号を飛ばし、番号付きの基底名も出現順に採番する", () => {
+    const allocateId = createHeadingIdAllocator();
+    expect(
+      ["details", "details-1", "details", "details-3", "details", "details-1"].map(allocateId)
+    ).toEqual(["details", "details-1", "details-2", "details-3", "details-4", "details-1-1"]);
   });
 
   it("percent-encodedアンカーを例外なく復号する", () => {

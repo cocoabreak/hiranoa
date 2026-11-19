@@ -74,7 +74,8 @@ try {
     const result = await driver.evaluate(`(() => {
       const main = document.querySelector('.markdown-body');
       return {
-        headingIds: [...main.querySelectorAll('h2')].map(h => h.id),
+        headingIds: [...main.querySelectorAll('h2')].map(h => h.getAttribute('data-logical-id')),
+        wikiHref: main.querySelector('.wiki-link[data-wiki-target="guide/index"]')?.getAttribute('href'),
         definition: main.querySelector('dl dd strong')?.textContent,
         footnote: main.querySelector('.footnote-ref a')?.getAttribute('href'),
         footnoteTarget: main.querySelector('[data-logical-id="fn1"]')?.textContent,
@@ -85,9 +86,8 @@ try {
         cjkLink: [...main.querySelectorAll('a')].find(a => a.textContent === 'https://example.com/')?.getAttribute('href'),
       };
     })()`);
-    assert.equal(result.headingIds.length, 2);
-    assert.ok(result.headingIds[0]);
-    assert.notEqual(result.headingIds[0], result.headingIds[1]);
+    assert.deepEqual(result.headingIds, ["日本語見出し", "日本語見出し-1"]);
+    assert.equal(result.wikiHref, "guide/index.md");
     assert.equal(result.definition, "Definition");
     assert.equal(result.footnote, "#fn1");
     assert.ok(result.footnoteTarget.includes("Footnote body"));

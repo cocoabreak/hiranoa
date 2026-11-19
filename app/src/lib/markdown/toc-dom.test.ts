@@ -22,6 +22,29 @@ describe("toc DOM", () => {
     expect(heading.scrollIntoView).toHaveBeenCalled();
   });
 
+  it("明示IDと自動採番が衝突しても文書順のIDとアンカー遷移を保つ", () => {
+    const container = document.createElement("div");
+    container.innerHTML = [
+      '<h1 id="notes-1">Explicit</h1>',
+      "<h2>Notes</h2>",
+      "<h2>Notes</h2>",
+      '<h3 id="notes-2">Collision</h3>',
+      "<h2>Notes</h2>",
+    ].join("");
+
+    expect(buildToc(container).map((heading) => heading.id)).toEqual([
+      "notes-1",
+      "notes",
+      "notes-2",
+      "notes-2-1",
+      "notes-3",
+    ]);
+    const heading = container.querySelector<HTMLElement>("#notes-2")!;
+    heading.scrollIntoView = vi.fn();
+    scrollToAnchor(container, "notes-2");
+    expect(heading.scrollIntoView).toHaveBeenCalled();
+  });
+
   it("60文字で切り詰めたslug同士の衝突も一意にする", () => {
     const container = document.createElement("div");
     const prefix = "a".repeat(60);

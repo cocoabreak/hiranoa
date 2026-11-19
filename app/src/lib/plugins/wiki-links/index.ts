@@ -13,6 +13,22 @@ const MESSAGES: Record<Locale, { missing: string }> = {
 type InlineRule = Parameters<MarkdownIt["inline"]["ruler"]["before"]>[2];
 
 const LBRACKET = 0x5b; // [
+const RBRACKET = 0x5d; // ]
+const LINE_FEED = 0x0a; // \n
+
+function findWikiLinkEnd(src: string, start: number): number {
+  // Stop at an invalid boundary instead of searching the remaining suffix for a close.
+  for (let pos = start; pos < src.length; pos++) {
+    const ch = src.charCodeAt(pos);
+    if (ch === RBRACKET) {
+      return src.charCodeAt(pos + 1) === RBRACKET ? pos : -1;
+    }
+    if (ch === LINE_FEED || (ch === LBRACKET && src.charCodeAt(pos + 1) === LBRACKET)) {
+      return -1;
+    }
+  }
+  return -1;
+}
 
 export type WikiLinkTargetState =
   | { status: "pending" }
@@ -61,24 +77,19 @@ const wikiLinkRule: InlineRule = (state, silent) => {
     return false;
   }
 
-  const end = src.indexOf("]]", pos + 2);
+  const end = findWikiLinkEnd(src, pos + 2);
   if (end === -1) return false;
 
   const inner = src.slice(pos + 2, end);
-  // 空・ネスト・改行跨ぎは不成立（通常のテキストとして残す）
-  if (!inner.trim() || inner.includes("[[") || inner.includes("]") || inner.includes("\n")) {
-    return false;
-  }
-
   const pipeIdx = inner.indexOf("|");
   const rawTarget = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner;
-  const alias = pipeIdx >= 0 ? inner.slice(pipeIdx + 1).trim() : "";
   const hashIdx = rawTarget.indexOf("#");
   const target = (hashIdx >= 0 ? rawTarget.slice(0, hashIdx) : rawTarget).trim();
   const hash = hashIdx >= 0 ? rawTarget.slice(hashIdx + 1).trim() : "";
   if (!target && !hash) return false;
 
   if (!silent) {
+    const alias = pipeIdx >= 0 ? inner.slice(pipeIdx + 1).trim() : "";
     const open = state.push("wiki_link_open", "a", 1);
     open.attrSet("class", "wiki-link");
     if (target) {
