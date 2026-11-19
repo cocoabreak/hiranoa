@@ -17,7 +17,7 @@ pub use dialogs::NativeDialogState;
 pub use external_editor::ExternalEditorState;
 pub(crate) use persistent_trust::restore_persisted_explorer_root;
 #[cfg(test)]
-use persistent_trust::validate_persisted_explorer_root;
+use persistent_trust::ExplorerRoot;
 pub use persistent_trust::PersistentExplorerRoot;
 pub(crate) use readers::{
     build_markdown_content, image_mime_type, normalize_path_for_display,
@@ -43,8 +43,8 @@ mod tests {
         let file = dir.path().join("README.md");
         std::fs::write(&file, "test").unwrap();
 
-        assert!(validate_persisted_explorer_root(&file.to_string_lossy()).is_err());
-        assert!(validate_persisted_explorer_root(&dir.path().to_string_lossy()).is_ok());
+        assert!(ExplorerRoot::inspect(&file).is_err());
+        assert!(ExplorerRoot::inspect(dir.path()).is_ok());
     }
     use std::fs;
 

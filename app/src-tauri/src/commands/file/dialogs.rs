@@ -1,6 +1,6 @@
 use super::normalize_path_for_display;
-use super::persistent_trust::{persist_explorer_root, PersistentExplorerRoot};
-use super::trusted_paths::{dangerous_root_reason, inspect_path, AllowedRoots, ShareQuery};
+use super::persistent_trust::{persist_explorer_root, ExplorerRoot, PersistentExplorerRoot};
+use super::trusted_paths::{AllowedRoots, ShareQuery};
 use crate::commands::has_markdown_extension;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -215,31 +215,32 @@ pub async fn authorize_folder_path(
 ) -> Result<bool, String> {
     let (share, _share_guard) =
         query_share_authorization(&state, &app, &dialogs, &path, ShareGrant::Folder)?;
-    let (root, confirmed) = match share {
+    let (share_path, confirmed) = match share {
         ShareQuery::Declined => return Ok(false),
-        ShareQuery::Local => (AllowedRoots::root_for_path(&path)?, false),
-        ShareQuery::Trusted(canonical) => (canonical, false),
-        ShareQuery::Confirmed(canonical) => (canonical, true),
+        ShareQuery::Local => (None, false),
+        ShareQuery::Trusted(canonical) => (Some(canonical), false),
+        ShareQuery::Confirmed(canonical) => (Some(canonical), true),
     };
-    if !inspect_path(&root)?.is_some_and(|(_, metadata)| metadata.is_dir()) {
-        return Err("フォルダーを指定してください".to_string());
-    }
-    if let Some(reason) = dangerous_root_reason(&root) {
-        return Err(reason.to_string());
+    let requested = Path::new(&path);
+    let root = ExplorerRoot::inspect(requested)?;
+    if share_path
+        .as_deref()
+        .is_some_and(|path| path != root.path())
+    {
+        return Err("確認した共有パスとフォルダーの参照先が一致しません".to_string());
     }
     if persistent.matches(&root) {
         return Ok(true);
     }
 
     if confirmed {
-        state.register_root_path(root.clone());
-        persist_explorer_root(&app, &persistent, &root)?;
+        persist_explorer_root(&app, &state, &persistent, root)?;
         return Ok(true);
     }
 
     let _dialog_guard = dialogs.try_acquire()?;
     let locale = crate::menu::resolve_locale(&app);
-    let display_root = normalize_path_for_display(&root);
+    let display_root = normalize_path_for_display(root.path());
     let (title, prompt) = if locale == "ja" {
         (
             "フォルダーへのアクセス確認",
@@ -261,8 +262,10 @@ pub async fn authorize_folder_path(
         .buttons(MessageDialogButtons::YesNo)
         .blocking_show();
     if approved {
-        state.register_root_path(root.clone());
-        persist_explorer_root(&app, &persistent, &root)?;
+        if ExplorerRoot::inspect(requested)? != root {
+            return Err("確認中にフォルダーの参照先が変更されました".to_string());
+        }
+        persist_explorer_root(&app, &state, &persistent, root)?;
     }
     Ok(approved)
 }
@@ -324,9 +327,8 @@ pub async fn pick_folder(
     let path = selected
         .into_path()
         .map_err(|e| format!("選択したパスを解決できません: {}", e))?;
-    let root = AllowedRoots::root_for_path(&path.to_string_lossy())?;
-    state.register_root_path(root.clone());
-    persist_explorer_root(&app, &persistent, &root)?;
+    let root = ExplorerRoot::inspect(&path)?;
+    persist_explorer_root(&app, &state, &persistent, root)?;
     Ok(Some(path.to_string_lossy().replace('\\', "/")))
 }
 
