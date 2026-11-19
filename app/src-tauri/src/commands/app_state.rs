@@ -14,15 +14,18 @@ fn file_for_kind(kind: &str) -> Result<&'static str, String> {
 }
 
 fn store_path_for_kind(kind: &str) -> Result<PathBuf, String> {
-    let file = file_for_kind(kind)?;
+    Ok(state_store_path(file_for_kind(kind)?))
+}
+
+pub(crate) fn state_store_path(file: &str) -> PathBuf {
     #[cfg(debug_assertions)]
     if let Some(dir) = std::env::var_os("HIRANOA_E2E_STATE_DIR") {
         let dir = PathBuf::from(dir);
         if dir.is_absolute() {
-            return Ok(dir.join(file));
+            return dir.join(file);
         }
     }
-    Ok(PathBuf::from(file))
+    PathBuf::from(file)
 }
 
 fn validate_state(kind: &str, value: &Value) -> Result<(), String> {

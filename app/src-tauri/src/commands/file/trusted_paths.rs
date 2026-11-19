@@ -1,3 +1,4 @@
+use super::persistent_trust::ExplorerRoot;
 use super::windows_share::WindowsSharePath;
 use crate::commands::has_markdown_extension;
 use std::borrow::Cow;
@@ -58,6 +59,7 @@ pub(super) fn inspect_path(path: &Path) -> Result<Option<(PathBuf, Metadata)>, S
 pub(super) struct AllowedEntries {
     pub(super) roots: Vec<PathBuf>,
     pub(super) files: HashSet<PathBuf>,
+    explorer_roots: Vec<ExplorerRoot>,
 }
 
 #[derive(Default, Clone)]
@@ -105,6 +107,15 @@ impl AllowedRoots {
         }
     }
 
+    pub(super) fn register_explorer_root(&self, root: ExplorerRoot) {
+        let mut entries = self.0.lock().unwrap();
+        // Previously approved Explorer roots stay available to open tabs for this session.
+        entries
+            .explorer_roots
+            .retain(|entry| entry.path() != root.path());
+        entries.explorer_roots.push(root);
+    }
+
     pub(super) fn canonical_zip_file_path(path: &str) -> Result<PathBuf, String> {
         Self::validate_canonical_zip_file(canonicalize_path(Path::new(path))?)
     }
@@ -149,19 +160,29 @@ impl AllowedRoots {
     }
 
     fn share_path_is_trusted(&self, candidate: &WindowsSharePath) -> bool {
-        let entries = self.0.lock().unwrap();
-        if entries
-            .files
-            .iter()
-            .any(|file| candidate.matches_path(file))
-        {
-            return true;
-        }
-        entries.roots.iter().any(|root| {
+        let contains_share = |root: &Path| {
             root.to_str()
                 .and_then(|path| WindowsSharePath::from_input(path).ok().flatten())
                 .is_some_and(|root| root.contains(candidate))
-        })
+        };
+        let explorer_roots = {
+            let entries = self.0.lock().unwrap();
+            if entries
+                .files
+                .iter()
+                .any(|file| candidate.matches_path(file))
+                || entries.roots.iter().any(|root| contains_share(root))
+            {
+                return true;
+            }
+            entries
+                .explorer_roots
+                .iter()
+                .filter(|root| contains_share(root.path()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        explorer_roots.iter().any(ExplorerRoot::still_matches)
     }
 
     pub(super) fn query_share(
@@ -242,14 +263,25 @@ impl AllowedRoots {
     }
 
     pub(crate) fn resolve_opened_path(&self, canonical: PathBuf) -> Result<PathBuf, String> {
-        let entries = self.0.lock().unwrap();
-        if entries.files.contains(&canonical)
-            || entries.roots.iter().any(|root| canonical.starts_with(root))
-        {
-            Ok(canonical)
-        } else {
-            Err("許可されていないファイルです".to_string())
-        }
+        let explorer_roots = {
+            let entries = self.0.lock().unwrap();
+            if entries.files.contains(&canonical)
+                || entries.roots.iter().any(|root| canonical.starts_with(root))
+            {
+                return Ok(canonical);
+            }
+            entries
+                .explorer_roots
+                .iter()
+                .filter(|root| canonical.starts_with(root.path()))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        explorer_roots
+            .iter()
+            .any(ExplorerRoot::still_matches)
+            .then_some(canonical)
+            .ok_or_else(|| "許可されていないファイルです".to_string())
     }
 
     pub(super) fn is_allowed(&self, path: &str) -> bool {
