@@ -1,3 +1,4 @@
+use crate::commands::file::ignore_rules::walk_entries;
 use crate::commands::file::readers::{
     native_image_mime_type, read_opened_image, UNSUPPORTED_IMAGE_FORMAT,
 };
@@ -8,7 +9,6 @@ use crate::commands::file::{
     AllowedRoots, MarkdownFileContent, MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
-use ignore::WalkBuilder;
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
@@ -1239,29 +1239,27 @@ fn list_native_entries(
         .filter(|(_, metadata)| metadata.is_dir())
         .ok_or_else(|| "フォルダーを指定してください".to_string())?;
     ensure_native_source_path(source, &directory)?;
-    Ok(
-        read_dir_single_level(&directory, respect_gitignore, Some(roots))
-            .into_iter()
-            .map(|entry| {
-                let path = if virtual_directory.is_empty() {
-                    entry.name.clone()
-                } else {
-                    format!("{virtual_directory}/{}", entry.name)
-                };
-                SourceEntry {
-                    name: entry.name,
-                    path: path.clone(),
-                    document: DocumentRef {
-                        source_id: document.source_id.clone(),
-                        path,
-                    },
-                    is_dir: entry.is_dir,
-                    is_hidden: entry.is_hidden,
-                    children: None,
-                }
-            })
-            .collect(),
-    )
+    Ok(read_dir_single_level(&directory, respect_gitignore, roots)
+        .into_iter()
+        .map(|entry| {
+            let path = if virtual_directory.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{virtual_directory}/{}", entry.name)
+            };
+            SourceEntry {
+                name: entry.name,
+                path: path.clone(),
+                document: DocumentRef {
+                    source_id: document.source_id.clone(),
+                    path,
+                },
+                is_dir: entry.is_dir,
+                is_hidden: entry.is_hidden,
+                children: None,
+            }
+        })
+        .collect())
 }
 
 fn read_zip_entry(
@@ -1756,17 +1754,16 @@ fn collect_source_markdown_paths_with_status(
 ) -> Result<(Vec<String>, bool), String> {
     match backend {
         SourceBackend::Native(source) => {
-            let mut builder = WalkBuilder::new(&source.root);
-            builder
-                .hidden(!show_hidden_files)
-                .git_ignore(respect_gitignore)
-                .git_global(respect_gitignore)
-                .git_exclude(respect_gitignore)
-                .ignore(respect_gitignore)
-                .parents(respect_gitignore);
+            let walk = walk_entries(
+                &source.root,
+                roots,
+                show_hidden_files,
+                respect_gitignore,
+                None,
+            );
             let mut paths = Vec::new();
             let mut truncated = false;
-            for (index, entry) in builder.build().enumerate() {
+            for (index, entry) in walk.enumerate() {
                 if index >= entry_limit {
                     truncated = true;
                     break;

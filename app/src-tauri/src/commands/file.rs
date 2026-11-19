@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 pub(crate) mod dialogs;
 pub(crate) mod external_editor;
+pub(crate) mod ignore_rules;
 mod persistent_trust;
 pub(crate) mod readers;
 pub(crate) mod safe_outline;
@@ -221,7 +222,7 @@ mod tests {
 
         let roots = roots_with(dir.path());
         let canonical = roots.resolve(&dir.path().to_string_lossy()).unwrap();
-        let entries = read_dir_single_level(&canonical, false, Some(&roots));
+        let entries = read_dir_single_level(&canonical, false, &roots);
 
         assert!(!entries.is_empty());
         for e in &entries {
@@ -262,7 +263,7 @@ mod tests {
         fs::write(dir.path().join("sub").join("child.md"), "").unwrap();
         fs::write(dir.path().join("top.md"), "").unwrap();
 
-        let entries = read_dir_single_level(dir.path(), false, None);
+        let entries = read_dir_single_level(dir.path(), false, &roots_with(dir.path()));
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         // 直下のみ返し、サブフォルダの中身（child.md）は含まれない
@@ -282,7 +283,7 @@ mod tests {
         fs::write(dir.path().join("noext"), "").unwrap();
         fs::create_dir(dir.path().join("assets")).unwrap();
 
-        let entries = read_dir_single_level(dir.path(), false, None);
+        let entries = read_dir_single_level(dir.path(), false, &roots_with(dir.path()));
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         // ディレクトリは常に含め、ファイルはMarkdown系のみ（拡張子は大小文字無視）
@@ -301,8 +302,10 @@ mod tests {
         fs::write(dir.path().join("secret.md"), "").unwrap();
         fs::write(dir.path().join("visible.md"), "").unwrap();
 
+        let roots = roots_with(dir.path());
+        let root = roots.resolve(&dir.path().to_string_lossy()).unwrap();
         let names = |respect: bool| -> Vec<String> {
-            read_dir_single_level(dir.path(), respect, None)
+            read_dir_single_level(&root, respect, &roots)
                 .into_iter()
                 .map(|e| e.name)
                 .collect()
@@ -333,7 +336,9 @@ mod tests {
         fs::write(sub.join("note.md"), "").unwrap();
         fs::write(sub.join("ignored-note.md"), "").unwrap();
 
-        let names: Vec<String> = read_dir_single_level(&sub, true, None)
+        let roots = roots_with(dir.path());
+        let sub = roots.resolve(&sub.to_string_lossy()).unwrap();
+        let names: Vec<String> = read_dir_single_level(&sub, true, &roots)
             .into_iter()
             .map(|e| e.name)
             .collect();
@@ -352,7 +357,7 @@ mod tests {
 
         let roots = roots_with(dir.path());
         let canonical = roots.resolve(&dir.path().to_string_lossy()).unwrap();
-        let entries = read_dir_single_level(&canonical, false, None);
+        let entries = read_dir_single_level(&canonical, false, &roots);
         let names: Vec<&str> = entries.iter().map(|e| e.name.as_str()).collect();
 
         // ディレクトリ (alpha, zeta) が先、その後ファイル (Apple.md, banana.md) が大小文字無視で並ぶ
@@ -367,7 +372,7 @@ mod tests {
 
         let roots = roots_with(dir.path());
         let canonical = roots.resolve(&dir.path().to_string_lossy()).unwrap();
-        let entries = read_dir_single_level(&canonical, false, None);
+        let entries = read_dir_single_level(&canonical, false, &roots);
 
         let hidden = entries.iter().find(|e| e.name == ".hidden.md").unwrap();
         let visible = entries.iter().find(|e| e.name == "visible.md").unwrap();

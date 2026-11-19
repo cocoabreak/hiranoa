@@ -533,6 +533,35 @@ try {
     await driver.waitFor("window.__e2e.getState().activeTab.path.endsWith(':guide%2Findex.md')");
   });
 
+  await test("除外設定が Wiki リンクと文書一覧に反映される", async () => {
+    const root = path.join(workDir, "fixtures", "ignore-rules");
+    mkdirSync(path.join(root, ".git"), { recursive: true });
+    mkdirSync(path.join(root, "notes"));
+    writeFileSync(path.join(root, ".gitignore"), "draft-*.md\n");
+    writeFileSync(path.join(root, "notes", ".gitignore"), "!draft-visible.md\n");
+    writeFileSync(path.join(root, "notes", "draft-hidden.md"), "# Hidden");
+    writeFileSync(path.join(root, "notes", "draft-visible.md"), "# Visible");
+    const file = path.join(root, "index.md");
+    writeFileSync(file, "# Ignore rules\n\n[[draft-hidden]] and [[draft-visible]]");
+
+    await open("openMarkdownFile", file);
+    await driver.waitFor(`document.querySelector('.markdown-body .wiki-link-missing[data-wiki-target="draft-hidden"]')
+      && document.querySelector('.markdown-body a[href="notes/draft-visible.md"]')`);
+    const paths = await driver.evaluate(`(async () => {
+      const { tabStore } = await import('/src/lib/stores/tab.svelte.ts');
+      const { document: { sourceId } } = tabStore.tabs.find(tab => tab.id === tabStore.activeTabId);
+      const { invoke } = window.__TAURI_INTERNALS__;
+      const list = (respectGitignore) => invoke('list_source_markdown_documents', {
+        sourceId, showHiddenFiles: false, respectGitignore
+      }).then(documents => documents.map(({ path }) => path).sort());
+      return [await list(true), await list(false)];
+    })()`);
+    assert.deepEqual(paths, [
+      ["index.md", "notes/draft-visible.md"],
+      ["index.md", "notes/draft-hidden.md", "notes/draft-visible.md"],
+    ]);
+  });
+
   await test("5 MiB境界で安全モードへ切り替わる", async () => {
     await open("openMarkdownFile", fixtures.belowLimit);
     assert.equal((await state()).activeTab.renderMode, "full");

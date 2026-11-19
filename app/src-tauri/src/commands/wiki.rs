@@ -1,6 +1,6 @@
+use super::file::ignore_rules::walk_entries;
 use super::file::{normalize_path_for_frontend, AllowedRoots};
 use super::MARKDOWN_EXTENSIONS;
-use ignore::WalkBuilder;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Mutex;
@@ -50,7 +50,7 @@ impl WikiIndexState {
         }
 
         // ファイル走査中はcache mutexを保持せず、別ルートの解決を待たせない。
-        let files = collect_markdown_files(scan_root, respect_gitignore, Some(roots));
+        let files = collect_markdown_files(scan_root, respect_gitignore, roots);
         let mut indexes = self
             .0
             .lock()
@@ -144,24 +144,16 @@ pub(crate) fn validate_targets(targets: Vec<String>) -> Result<Vec<String>, Stri
 fn collect_markdown_files(
     scan_root: &Path,
     respect_gitignore: bool,
-    roots: Option<&AllowedRoots>,
+    roots: &AllowedRoots,
 ) -> Vec<String> {
-    let mut builder = WalkBuilder::new(scan_root);
-    builder
-        // 隠しファイルの扱いはツリーと同じく除外しない
-        .hidden(false)
-        .git_ignore(respect_gitignore)
-        .git_global(respect_gitignore)
-        .git_exclude(respect_gitignore)
-        .ignore(respect_gitignore)
-        .parents(respect_gitignore);
-
+    // 隠しファイルの扱いはツリーと同じく除外しない。
+    let walk = walk_entries(scan_root, roots, true, respect_gitignore, None);
     let mut files = Vec::new();
-    for entry in builder.build().flatten().take(MAX_WIKI_SCAN_ENTRIES) {
+    for entry in walk.flatten().take(MAX_WIKI_SCAN_ENTRIES) {
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;
         }
-        if roots.is_some_and(|r| r.resolve(&entry.path().to_string_lossy()).is_err()) {
+        if roots.resolve(&entry.path().to_string_lossy()).is_err() {
             continue;
         }
         let path = normalize_path_for_frontend(entry.path());
@@ -476,7 +468,10 @@ mod tests {
         write(dir.path(), "sub/b.markdown", "");
         write(dir.path(), "sub/c.txt", "");
 
-        let files = collect_markdown_files(dir.path(), false, None);
+        let roots = AllowedRoots::new();
+        roots.register(&dir.path().to_string_lossy()).unwrap();
+        let root = roots.resolve(&dir.path().to_string_lossy()).unwrap();
+        let files = collect_markdown_files(&root, false, &roots);
         let names: Vec<&str> = files
             .iter()
             .map(|p| p.rsplit('/').next().unwrap())
@@ -494,11 +489,14 @@ mod tests {
         write(dir.path(), "ignored/hidden.md", "");
         write(dir.path(), "visible.md", "");
 
-        let with = collect_markdown_files(dir.path(), true, None);
+        let roots = AllowedRoots::new();
+        roots.register(&dir.path().to_string_lossy()).unwrap();
+        let root = roots.resolve(&dir.path().to_string_lossy()).unwrap();
+        let with = collect_markdown_files(&root, true, &roots);
         assert!(!with.iter().any(|p| p.ends_with("hidden.md")));
         assert!(with.iter().any(|p| p.ends_with("visible.md")));
 
-        let without = collect_markdown_files(dir.path(), false, None);
+        let without = collect_markdown_files(&root, false, &roots);
         assert!(without.iter().any(|p| p.ends_with("hidden.md")));
     }
 }
