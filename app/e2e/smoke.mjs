@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +17,7 @@ const workDir = mkdtempSync(path.join(os.tmpdir(), "hiranoa-e2e-"));
 const fixtures = createFixtures(path.join(workDir, "fixtures"));
 const port = await findFreePort();
 const driver = new WebView2Driver({ port });
+const mermaidPolicyProbeUrl = "https://mermaid-images.example.invalid/frame-policy.png";
 let child;
 let failed = false;
 let diagnostics;
@@ -160,6 +161,91 @@ try {
       containedByShape: true,
     });
     assert.equal(labelMetrics.paragraphLineHeight, "28px");
+  });
+
+  await test("Mermaid の外部画像は確認・ブロック中にリクエストを開始しない", async () => {
+    const imageOrigin = "https://mermaid-images.example.invalid";
+    const png = readFileSync(path.join(appDir, "static", "favicon.png")).toString("base64");
+    const requests = [];
+    // Supply a test image through CDP. No requests leave the WebView test environment.
+    const client = await driver.connect({
+      onEvent: ({ method, params }) => {
+        if (method !== "Fetch.requestPaused") return;
+        requests.push(
+          client.send("Fetch.fulfillRequest", {
+            requestId: params.requestId,
+            responseCode: 200,
+            responseHeaders: [{ name: "Content-Type", value: "image/png" }],
+            body: png,
+          })
+        );
+      },
+    });
+    const approveButton = `[...document.querySelectorAll('button')].find(el =>
+      ['Load images for this document', 'この文書の画像を読み込む'].includes(el.textContent.trim()))`;
+    try {
+      await client.send("Fetch.enable", { patterns: [{ urlPattern: `${imageOrigin}/*` }] });
+      const framePolicy = await driver.evaluate(`(async () => {
+        const frame = document.querySelector('iframe[data-mermaid-renderer]');
+        const violation = new Promise(resolve => {
+          frame.contentDocument.addEventListener('securitypolicyviolation',
+            event => resolve(event.effectiveDirective), { once: true });
+        });
+        const image = new frame.contentWindow.Image();
+        image.src = ${JSON.stringify(mermaidPolicyProbeUrl)};
+        return Promise.all([violation, image.decode().then(() => true, () => false)]);
+      })()`);
+      assert.deepEqual(framePolicy, ["img-src", false]);
+      assert.equal(requests.length, 0, "The isolated renderer CSP must stop the image request");
+      for (const policy of ["block", "ask"]) {
+        await driver.evaluate(`(async () => {
+          const { settingsStore } = await import('/src/lib/stores/settings.svelte.ts');
+          settingsStore.setExternalImagePolicy(${JSON.stringify(policy)});
+        })()`);
+        const file = path.join(workDir, "fixtures", `mermaid-images-${policy}.md`);
+        writeFileSync(
+          file,
+          [
+            `# ${policy} diagram policy`,
+            "",
+            "```mermaid",
+            "flowchart LR",
+            '  A[Start] --> B["img: and image() are labels"]',
+            "```",
+            "",
+            "```mermaid",
+            "flowchart LR",
+            `  A@{ img: "data:image/png;base64,${png}", w: 32, h: 32 }`,
+            "```",
+            "",
+            "```mermaid",
+            "flowchart LR",
+            `  A@{ img: "${imageOrigin}/${policy}.png", label: "Example image", w: 48, h: 48 }`,
+            "```",
+          ].join("\n")
+        );
+        await open("openMarkdownFile", file);
+        await driver.waitFor(
+          `document.querySelector('.markdown-body h1')?.textContent === '${policy} diagram policy'
+            && document.querySelectorAll('.mermaid-rendered > svg').length === 2
+            && document.querySelector('.mermaid-rendered > svg image')?.getAttribute('href')?.startsWith('data:image/png')
+            && document.querySelector('.mermaid-blocked') !== null`,
+          { timeoutMs: 30_000 }
+        );
+        assert.equal(requests.length, 0, `Mermaid started an image request during ${policy}`);
+        assert.equal(await driver.evaluate(`Boolean(${approveButton})`), policy === "ask");
+      }
+
+      await driver.evaluate(`(${approveButton}).click()`);
+      await driver.waitFor(
+        `document.querySelector('.mermaid-rendered svg image[href="${imageOrigin}/ask.png"]') !== null`,
+        { timeoutMs: 30_000 }
+      );
+      assert.ok(requests.length > 0, "The approved diagram should request its image");
+      await Promise.all(requests);
+    } finally {
+      client.close();
+    }
   });
 
   await test("数式とMermaid内数式を描画できる", async () => {
@@ -393,7 +479,11 @@ try {
     assert.ok(restored.scroll.rendered >= 500, `scroll=${restored.scroll.rendered}`);
   });
 
-  assert.deepEqual(diagnostics.errors, [], `ブラウザエラー: ${diagnostics.errors.join("\n")}`);
+  const unexpectedErrors = diagnostics.errors.filter(
+    (message) =>
+      !message.includes(mermaidPolicyProbeUrl) || !message.includes("Content Security Policy")
+  );
+  assert.deepEqual(unexpectedErrors, [], `ブラウザエラー: ${unexpectedErrors.join("\n")}`);
 } catch (error) {
   failed = true;
   globalThis.console.error(error);
