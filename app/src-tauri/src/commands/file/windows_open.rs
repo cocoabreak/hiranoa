@@ -213,6 +213,10 @@ pub(super) fn open_direct(path: &Path, allow_share: bool) -> io::Result<File> {
     open_direct_with(path, allow_share, GENERIC_READ, 0)
 }
 
+pub(super) fn open_direct_attributes(path: &Path, allow_share: bool) -> io::Result<File> {
+    open_direct_with(path, allow_share, FILE_READ_ATTRIBUTES, 0)
+}
+
 pub(super) fn open_scan_directory(path: &Path, list_entries: bool) -> io::Result<File> {
     use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
     use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
