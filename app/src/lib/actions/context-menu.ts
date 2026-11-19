@@ -17,8 +17,8 @@ interface ViewerContextMenuParams {
     document?: DocumentRef;
     source?: DocumentSourceInfo;
   };
-  /** HTMLエクスポート用の描画済みHTML */
-  renderedHtml: string;
+  /** HTMLエクスポート用の描画済みHTML。描画失敗時は null。 */
+  renderedHtml: string | null;
   renderMode: RenderMode;
   viewMode?: ViewMode;
 }
@@ -116,7 +116,7 @@ export async function showViewerContextMenu(params: ViewerContextMenuParams): Pr
       );
     }
 
-    if (hasRenderedContent) {
+    if (hasRenderedContent && renderedHtml !== null) {
       items.push(
         await MenuItem.new({
           text: m.contextMenu.saveAsHtml,
