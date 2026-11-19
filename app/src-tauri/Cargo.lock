@@ -1573,6 +1573,7 @@ dependencies = [
  "git2",
  "ignore",
  "libc",
+ "libgit2-sys",
  "notify",
  "open",
  "pulldown-cmark",

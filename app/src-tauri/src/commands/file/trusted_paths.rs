@@ -65,6 +65,26 @@ pub(crate) fn open_path_without_links(path: &Path, _allow_share: bool) -> io::Re
 }
 
 #[cfg(windows)]
+pub(crate) fn open_directory_for_traversal(path: &Path, _allow_share: bool) -> io::Result<File> {
+    super::windows_open::open_scan_directory(path, false)
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn open_directory_for_traversal(path: &Path, _allow_share: bool) -> io::Result<File> {
+    open_unix_path_without_links(path, unix_traversal_flags())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn unix_traversal_flags() -> libc::c_int {
+    libc::O_PATH | libc::O_DIRECTORY
+}
+
+#[cfg(target_os = "macos")]
+pub(super) fn unix_traversal_flags() -> libc::c_int {
+    libc::O_SEARCH
+}
+
+#[cfg(windows)]
 pub(crate) fn open_path_attributes_without_links(
     path: &Path,
     allow_share: bool,
@@ -106,12 +126,8 @@ fn open_unix_path_without_links(path: &Path, leaf_access: libc::c_int) -> io::Re
     let mut current = File::open("/")?;
     while let Some(Component::Normal(part)) = parts.next() {
         let name = CString::new(part.as_bytes())?;
-        #[cfg(target_os = "linux")]
-        let parent_access = libc::O_PATH | libc::O_DIRECTORY;
-        #[cfg(target_os = "macos")]
-        let parent_access = libc::O_SEARCH;
         let access = if parts.peek().is_some() {
-            parent_access
+            unix_traversal_flags()
         } else {
             leaf_access
         };

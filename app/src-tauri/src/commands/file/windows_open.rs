@@ -243,18 +243,19 @@ fn open_direct_with(path: &Path, allow_share: bool, access: u32, options: u32) -
 pub(super) fn open_relative_direct(
     directory: &File,
     relative: &Path,
-    directory_only: bool,
+    mode: super::directory_scan::ChildAccess,
 ) -> io::Result<File> {
+    use super::directory_scan::ChildAccess;
     use windows_sys::Wdk::Storage::FileSystem::FILE_DIRECTORY_FILE;
     use windows_sys::Win32::Storage::FileSystem::FILE_LIST_DIRECTORY;
 
-    let (access, options) = if directory_only {
-        (
+    let (access, options) = match mode {
+        ChildAccess::Read => (GENERIC_READ, 0),
+        ChildAccess::Traverse => (FILE_READ_ATTRIBUTES, FILE_DIRECTORY_FILE),
+        ChildAccess::List => (
             FILE_LIST_DIRECTORY | FILE_READ_ATTRIBUTES,
             FILE_DIRECTORY_FILE,
-        )
-    } else {
-        (GENERIC_READ, 0)
+        ),
     };
     open_native(Some(directory), relative.as_os_str(), access, options).map_err(status_error)
 }

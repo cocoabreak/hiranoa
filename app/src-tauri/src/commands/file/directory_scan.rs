@@ -145,6 +145,24 @@ pub(crate) fn read_directory_names(handle: File, limit: usize) -> io::Result<Vec
     Ok(names)
 }
 
+/// Opens a relative path from a live directory without traversing links.
+pub(crate) fn open_directory_child(
+    directory: &File,
+    relative: &Path,
+    access: ChildAccess,
+) -> io::Result<File> {
+    #[cfg(unix)]
+    let directory = std::os::fd::AsFd::as_fd(directory);
+    open_below(directory, relative, access)
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ChildAccess {
+    Read,
+    Traverse,
+    List,
+}
+
 enum EntryKind {
     Directory,
     File,
@@ -160,7 +178,7 @@ pub(crate) enum SubdirectoryErrors {
 fn open_below(
     directory: DirectoryHandle<'_>,
     relative: &Path,
-    directory_only: bool,
+    access: ChildAccess,
 ) -> io::Result<File> {
     let mut normalized = PathBuf::new();
     for part in relative.components() {
@@ -180,7 +198,7 @@ fn open_below(
     if normalized.as_os_str().is_empty() {
         return Err(io::ErrorKind::InvalidInput.into());
     }
-    open_relative_direct(directory, &normalized, directory_only)
+    open_relative_direct(directory, &normalized, access)
 }
 
 pub(crate) struct VerifiedDirectory<'a> {
@@ -266,7 +284,7 @@ fn scan(
                     dir.starts_with(root_path) || roots.resolve_opened_path(dir.to_owned()).is_ok()
                 },
                 |rule| match rule.strip_prefix(root_path) {
-                    Ok(relative) => open_below(root_handle, relative, false).ok(),
+                    Ok(relative) => open_below(root_handle, relative, ChildAccess::Read).ok(),
                     Err(_) => open_rule_path(roots, rule),
                 },
             ),
@@ -285,7 +303,9 @@ fn scan(
                     truncated = true;
                     continue;
                 }
-                match open_below(directory.handle(), name, true).and_then(DirectoryReader::new) {
+                match open_below(directory.handle(), name, ChildAccess::List)
+                    .and_then(DirectoryReader::new)
+                {
                     Ok(child) => pending.push((path, child)),
                     Err(error)
                         if error.kind() == io::ErrorKind::NotFound

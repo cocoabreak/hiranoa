@@ -1,8 +1,5 @@
-use super::file::directory_scan::read_directory_names;
 use super::file::readers::native_image_mime_type;
-use super::file::trusted_paths::{
-    final_path_for_file, open_path_attributes_without_links, open_path_without_links,
-};
+use super::file::trusted_paths::{final_path_for_file, open_path_attributes_without_links};
 use super::file::{
     image_mime_type, trusted_paths::open_allowed_file, AllowedRoots, NativeDialogState,
 };
@@ -17,8 +14,11 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
+
+mod objects;
+use objects::{GitDirectory, StagedObjects};
 
 const MAX_TEXT: usize = 2 * 1024 * 1024;
 const MAX_IMAGE: usize = 5 * 1024 * 1024;
@@ -26,6 +26,7 @@ const MAX_ASSETS: usize = 32 * 1024 * 1024;
 const MAX_HISTORY: usize = 100;
 const MAX_WALK: usize = 5000;
 const MAX_OBJECT_METADATA: usize = 2 * 1024 * 1024;
+const HISTORY_READ_TIME: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -53,7 +54,7 @@ struct HistorySession {
     id: String,
     file: PathBuf,
     root: PathBuf,
-    git_dir: PathBuf,
+    repository: HistoryRepository,
     relative: PathBuf,
     commits: HashSet<String>,
     assets: HashMap<String, (String, usize)>,
@@ -75,6 +76,16 @@ impl Drop for OpeningGuard<'_> {
 
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
+}
+
+pub(crate) fn cleanup_history_cache(app: &AppHandle) {
+    if let Ok(cache) = app.path().app_cache_dir() {
+        tauri::async_runtime::spawn_blocking(move || {
+            if let Err(error) = objects::cleanup_existing_cache(&cache) {
+                eprintln!("failed to clean up Git history cache: {error}");
+            }
+        });
+    }
 }
 /// Without history consent, stop at the first ancestor outside AllowedRoots.
 /// A consented search is still restricted to this document's direct ancestors.
@@ -130,30 +141,11 @@ fn git_path_attributes(path: &Path) -> Result<Option<Metadata>, String> {
         .transpose()
 }
 
-fn direct_directory(path: &Path, boundary: &Path) -> Result<PathBuf, String> {
-    if !path.starts_with(boundary)
-        || !git_path_attributes(path)?.is_some_and(|metadata| metadata.is_dir())
-    {
-        return Err("External Git directories are not supported".into());
-    }
-    Ok(path.to_owned())
-}
-fn metadata_file(path: &Path, boundary: &Path, limit: u64) -> Result<Option<File>, String> {
-    if !path.starts_with(boundary) {
-        return Err("Unsupported Git metadata file".into());
-    }
-    let Some(file) = probe_git_path(path, open_path_without_links)? else {
-        return Ok(None);
-    };
-    let metadata = file.metadata().map_err(err)?;
-    if !metadata.is_file() || metadata.len() > limit {
-        return Err("Unsupported Git metadata file".into());
-    }
-    Ok(Some(file))
-}
 struct HistoryRepository {
+    // Drop the libgit2 backends before deleting their staged files.
     repository: Repository,
-    git_dir: PathBuf,
+    objects: StagedObjects,
+    git_dir: GitDirectory,
     head: Option<Oid>,
 }
 impl std::ops::Deref for HistoryRepository {
@@ -172,8 +164,10 @@ fn read_metadata(file: File, limit: usize) -> Result<String, String> {
     }
     String::from_utf8(bytes).map_err(err)
 }
-fn head_id(git_dir: &Path) -> Result<Option<Oid>, String> {
-    let head = metadata_file(&git_dir.join("HEAD"), git_dir, 4096)?.ok_or("Missing Git HEAD")?;
+fn head_id(git_dir: &GitDirectory) -> Result<Option<Oid>, String> {
+    let (head, _) = git_dir
+        .open_file(Path::new("HEAD"), 4096)?
+        .ok_or("Missing Git HEAD")?;
     let mut value = read_metadata(head, 4096)?;
     for _ in 0..8 {
         let Some(reference) = value.trim().strip_prefix("ref: ") else {
@@ -191,13 +185,14 @@ fn head_id(git_dir: &Path) -> Result<Option<Oid>, String> {
         {
             return Err("Invalid Git HEAD".into());
         }
-        let candidate = git_dir.join(Path::new(reference).components().collect::<PathBuf>());
-        if let Some(file) = metadata_file(&candidate, git_dir, 4096)? {
+        let candidate = Path::new(reference).components().collect::<PathBuf>();
+        if let Some((file, _)) = git_dir.open_file(&candidate, 4096)? {
             value = read_metadata(file, 4096)?;
             continue;
         }
-        let packed = git_dir.join("packed-refs");
-        if let Some(file) = metadata_file(&packed, git_dir, MAX_OBJECT_METADATA as u64)? {
+        if let Some((file, _)) =
+            git_dir.open_file(Path::new("packed-refs"), MAX_OBJECT_METADATA as u64)?
+        {
             for line in read_metadata(file, MAX_OBJECT_METADATA)?.lines() {
                 if let Some((oid, name)) = line.split_once(' ') {
                     if name == reference {
@@ -213,76 +208,70 @@ fn head_id(git_dir: &Path) -> Result<Option<Oid>, String> {
     }
     Err("Too many symbolic Git references".into())
 }
-fn open_repository(
-    root: &Path,
-    expected: Option<&Path>,
-) -> Result<(HistoryRepository, PathBuf), String> {
-    let git_dir = direct_directory(&root.join(".git"), root)?;
-    if expected.is_some_and(|path| path != git_dir) {
-        return Err("Git directory changed".into());
-    }
-    let objects = direct_directory(&git_dir.join("objects"), &git_dir)?;
-    if git_path_attributes(&git_dir.join("commondir"))?.is_some()
-        || git_path_attributes(&objects.join("info").join("alternates"))?.is_some()
-        || git_path_attributes(&objects.join("info").join("http-alternates"))?.is_some()
+fn open_repository(root: &Path, cache: &Path) -> Result<HistoryRepository, String> {
+    let git_dir = GitDirectory::open(root.join(".git"))?;
+    let objects = git_dir
+        .subdirectory("objects")?
+        .ok_or("Missing Git objects directory")?;
+    if git_dir.has_entry("commondir")?
+        || objects.has_entry("info/alternates")?
+        || objects.has_entry("info/http-alternates")?
     {
         return Err("External Git object databases are not supported".into());
     }
-    let pack = objects.join("pack");
-    if let Some(directory) = probe_git_path(&pack, open_path_without_links)? {
-        if !directory.metadata().map_err(err)?.is_dir() {
-            return Err("Unsupported Git pack directory".into());
-        }
-        for name in read_directory_names(directory, 128).map_err(err)? {
-            metadata_file(&pack.join(name), &git_dir, 2 * 1024 * 1024 * 1024)?
-                .ok_or("Git pack file disappeared")?;
-        }
-    }
-    metadata_file(
-        &git_dir.join("packed-refs"),
-        &git_dir,
-        MAX_OBJECT_METADATA as u64,
-    )?;
+    git_dir.open_file(Path::new("packed-refs"), MAX_OBJECT_METADATA as u64)?;
     let head = head_id(&git_dir)?;
-    // Wrap only the validated object database. Opening a repository normally
-    // would eagerly read local/global config, includes, grafts and shallow files.
+    let objects = StagedObjects::new(objects, cache)?;
     let odb = Odb::new().map_err(err)?;
-    odb.add_disk_alternate(objects.to_str().ok_or("Invalid Git object path")?)
-        .map_err(err)?;
+    objects.register_loose(&odb)?;
+    // A normal repository open would read config, includes and other metadata.
     let repository = Repository::from_odb(odb).map_err(err)?;
     repository
         .set_config(&git2::Config::new().map_err(err)?)
         .map_err(err)?;
-    Ok((
-        HistoryRepository {
-            repository,
-            git_dir: git_dir.clone(),
-            head,
-        },
+    Ok(HistoryRepository {
+        repository,
+        objects,
         git_dir,
-    ))
+        head,
+    })
 }
 fn bounded_object(
     repo: &HistoryRepository,
     oid: Oid,
     kind: ObjectType,
     limit: usize,
+    deadline: Instant,
 ) -> Result<(), String> {
-    let name = oid.to_string();
-    let loose = repo
-        .git_dir
-        .join("objects")
-        .join(&name[..2])
-        .join(&name[2..]);
-    metadata_file(&loose, &repo.git_dir, 32 * 1024 * 1024)?;
-    let (size, actual) = repo.odb().map_err(err)?.read_header(oid).map_err(err)?;
+    let odb = repo.odb().map_err(err)?;
+    let mut header = odb.read_header(oid);
+    if header
+        .as_ref()
+        .is_err_and(|error| error.code() == git2::ErrorCode::NotFound)
+        && (repo.objects.stage_loose(oid, deadline)?
+            || repo.objects.stage_pack(&odb, oid, deadline)?)
+    {
+        header = odb.read_header(oid);
+    }
+    let (size, actual) = header.map_err(err)?;
     if actual != kind || size > limit {
         return Err("Git object exceeds the comparison limit".into());
     }
     Ok(())
 }
-fn file_oid(repo: &HistoryRepository, commit: Oid, path: &Path) -> Result<Option<Oid>, String> {
-    bounded_object(repo, commit, ObjectType::Commit, MAX_OBJECT_METADATA)?;
+fn file_oid(
+    repo: &HistoryRepository,
+    commit: Oid,
+    path: &Path,
+    deadline: Instant,
+) -> Result<Option<Oid>, String> {
+    bounded_object(
+        repo,
+        commit,
+        ObjectType::Commit,
+        MAX_OBJECT_METADATA,
+        deadline,
+    )?;
     let mut tree_id = repo.find_commit(commit).map_err(err)?.tree_id();
     let components: Vec<_> = path.components().collect();
     if components.is_empty() || components.len() > 128 {
@@ -292,7 +281,13 @@ fn file_oid(repo: &HistoryRepository, commit: Oid, path: &Path) -> Result<Option
         let Component::Normal(name) = component else {
             return Err("Invalid Git path".into());
         };
-        bounded_object(repo, tree_id, ObjectType::Tree, MAX_OBJECT_METADATA)?;
+        bounded_object(
+            repo,
+            tree_id,
+            ObjectType::Tree,
+            MAX_OBJECT_METADATA,
+            deadline,
+        )?;
         let tree = repo.find_tree(tree_id).map_err(err)?;
         let Some(entry) = name.to_str().and_then(|name| tree.get_name(name)) else {
             return Ok(None);
@@ -317,20 +312,29 @@ fn history(
     let Some(mut id) = repo.head else {
         return Ok((vec![], false));
     };
-    let started = Instant::now();
+    let deadline = Instant::now() + HISTORY_READ_TIME;
     let mut commits = Vec::new();
     for visited in 0..MAX_WALK {
-        if started.elapsed() > Duration::from_secs(10) {
+        if Instant::now() >= deadline {
             return Ok((commits, true));
         }
-        bounded_object(repo, id, ObjectType::Commit, MAX_OBJECT_METADATA)?;
-        let commit = repo.find_commit(id).map_err(err)?;
-        let current = file_oid(repo, id, relative)?;
-        let parent = commit.parent_id(0).ok();
-        let previous = parent
-            .map(|id| file_oid(repo, id, relative))
-            .transpose()?
-            .flatten();
+        let step = (|| {
+            bounded_object(repo, id, ObjectType::Commit, MAX_OBJECT_METADATA, deadline)?;
+            let commit = repo.find_commit(id).map_err(err)?;
+            let current = file_oid(repo, id, relative, deadline)?;
+            let parent = commit.parent_id(0).ok();
+            let previous = parent
+                .map(|id| file_oid(repo, id, relative, deadline))
+                .transpose()?
+                .flatten();
+            Ok::<_, String>((commit, current, parent, previous))
+        })();
+        let (commit, current, parent, previous) = match step {
+            Err(_) if !commits.is_empty() && Instant::now() >= deadline => {
+                return Ok((commits, true));
+            }
+            result => result?,
+        };
         if current != previous || visited == 0 {
             commits.push(HistoryCommit {
                 id: id.to_string(),
@@ -376,14 +380,16 @@ fn read_allowed(roots: &AllowedRoots, path: &Path, limit: usize) -> Result<Vec<u
     Ok(bytes)
 }
 impl HistorySession {
-    fn repository(&self, roots: &AllowedRoots) -> Result<HistoryRepository, String> {
+    fn repository(&self, roots: &AllowedRoots) -> Result<&HistoryRepository, String> {
         if !roots
             .inspect_allowed_path_without_links(&self.file)?
             .is_some_and(|(opened, metadata)| opened == self.file && metadata.is_file())
         {
             return Err("Document or repository changed".into());
         }
-        open_repository(&self.root, Some(&self.git_dir)).map(|(repo, _)| repo)
+        self.repository.git_dir.verify_location()?;
+        self.repository.objects.verify_location()?;
+        Ok(&self.repository)
     }
     fn revision(&self, revision: &str) -> Result<Oid, String> {
         if !self.commits.contains(revision) {
@@ -398,10 +404,11 @@ impl HistorySession {
         path: &Path,
         limit: usize,
     ) -> Result<Option<Vec<u8>>, String> {
-        let Some(oid) = file_oid(repo, self.revision(revision)?, path)? else {
+        let deadline = Instant::now() + HISTORY_READ_TIME;
+        let Some(oid) = file_oid(repo, self.revision(revision)?, path, deadline)? else {
             return Ok(None);
         };
-        bounded_object(repo, oid, ObjectType::Blob, limit)?;
+        bounded_object(repo, oid, ObjectType::Blob, limit, deadline)?;
         Ok(Some(repo.find_blob(oid).map_err(err)?.content().to_vec()))
     }
 }
@@ -508,22 +515,36 @@ pub async fn open_git_history(
         Some(root) => root,
         None => git_root(&file, None)?.ok_or("No Git repository found")?,
     };
-    let (repo, git_dir) = open_repository(&root, None)?;
     let relative = file.strip_prefix(&root).map_err(err)?.to_path_buf();
-    let (commits, truncated) = history(&repo, &relative)?;
+    let cache = app.path().app_cache_dir().map_err(err)?;
+    let (repository, commits, truncated) = tauri::async_runtime::spawn_blocking({
+        let root = root.clone();
+        let relative = relative.clone();
+        move || {
+            let repository = open_repository(&root, &cache)?;
+            let (commits, truncated) = history(&repository, &relative)?;
+            Ok::<_, String>((repository, commits, truncated))
+        }
+    })
+    .await
+    .map_err(err)??;
     let mut inner = state.0.lock().map_err(err)?;
     inner.next_id += 1;
     let id = format!("history-{}", inner.next_id);
-    inner.session = Some(HistorySession {
+    let previous = inner.session.replace(HistorySession {
         id: id.clone(),
         file,
         root,
-        git_dir,
+        repository,
         relative: relative.clone(),
         commits: commits.iter().map(|c| c.id.clone()).collect(),
         assets: HashMap::new(),
         asset_bytes: 0,
     });
+    drop(inner);
+    if let Some(previous) = previous {
+        tauri::async_runtime::spawn_blocking(move || drop(previous));
+    }
     Ok(Some(HistoryInfo {
         session_id: id,
         path: relative.to_string_lossy().replace('\\', "/"),
@@ -551,7 +572,7 @@ pub fn read_git_snapshot(
         session.asset_bytes = session.assets.values().map(|(_, size)| size).sum();
         Some(read_allowed(&roots, &session.file, MAX_TEXT)?)
     } else {
-        session.blob(&repo, &revision, &session.relative, MAX_TEXT)?
+        session.blob(repo, &revision, &session.relative, MAX_TEXT)?
     };
     let present = bytes.is_some();
     let bytes = bytes.unwrap_or_default();
@@ -595,7 +616,7 @@ pub fn read_git_image(
         read_allowed(&roots, &actual, MAX_IMAGE)?
     } else {
         session
-            .blob(&repo, &revision, &path, MAX_IMAGE)?
+            .blob(repo, &revision, &path, MAX_IMAGE)?
             .ok_or("Image not present at this revision")?
     };
     if session.asset_bytes + bytes.len() > MAX_ASSETS {
@@ -608,20 +629,31 @@ pub fn read_git_image(
 }
 
 #[tauri::command]
-pub fn close_git_history(
-    session_id: String,
-    state: State<'_, GitHistoryState>,
-) -> Result<(), String> {
-    let mut inner = state.0.lock().map_err(err)?;
-    if inner.session.as_ref().is_some_and(|s| s.id == session_id) {
-        inner.session = None;
-    }
-    Ok(())
+pub async fn close_git_history(session_id: String, app: AppHandle) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<GitHistoryState>();
+        let session = {
+            let mut inner = state.0.lock().map_err(err)?;
+            if inner.session.as_ref().is_some_and(|s| s.id == session_id) {
+                inner.session.take()
+            } else {
+                None
+            }
+        };
+        drop(session);
+        Ok(())
+    })
+    .await
+    .map_err(err)?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn open_test_repository(root: &Path) -> Result<HistoryRepository, String> {
+        open_repository(root, &root.join("test-cache"))
+    }
+
     fn commit(repo: &Repository, root: &Path, text: &str, image: &[u8]) -> Oid {
         std::fs::create_dir_all(root.join("docs")).unwrap();
         std::fs::create_dir_all(root.join("images")).unwrap();
@@ -656,7 +688,7 @@ mod tests {
         let session = HistorySession {
             id: "test".into(),
             file: root.join("docs/guide.md"),
-            git_dir: root.join(".git"),
+            repository: open_test_repository(&root).unwrap(),
             root,
             relative: PathBuf::from("docs/guide.md"),
             commits: [old.to_string(), new.to_string()].into_iter().collect(),
@@ -668,16 +700,17 @@ mod tests {
     #[test]
     fn history_and_images_are_bound_to_revision_and_do_not_modify_index() {
         let (_directory, session, roots, old, new) = fixture();
-        let before_index = std::fs::read(session.git_dir.join("index")).unwrap();
-        let before_head = std::fs::read(session.git_dir.join("HEAD")).unwrap();
+        let git_dir = &session.repository.git_dir.path;
+        let before_index = std::fs::read(git_dir.join("index")).unwrap();
+        let before_head = std::fs::read(git_dir.join("HEAD")).unwrap();
         let repo = session.repository(&roots).unwrap();
-        let (items, truncated) = history(&repo, &session.relative).unwrap();
+        let (items, truncated) = history(repo, &session.relative).unwrap();
         assert!(!truncated);
         assert_eq!(items.len(), 2);
         assert_eq!(items[0].id, new.to_string());
         assert_eq!(
             session
-                .blob(&repo, &old.to_string(), &session.relative, MAX_TEXT)
+                .blob(repo, &old.to_string(), &session.relative, MAX_TEXT)
                 .unwrap()
                 .unwrap(),
             b"# Guide\n\nold text\n"
@@ -685,34 +718,72 @@ mod tests {
         let (image, _) = image_path(&session.relative, "../images/example.png").unwrap();
         assert_eq!(
             session
-                .blob(&repo, &old.to_string(), &image, MAX_IMAGE)
+                .blob(repo, &old.to_string(), &image, MAX_IMAGE)
                 .unwrap()
                 .unwrap(),
             b"old-image"
         );
         assert_eq!(
             session
-                .blob(&repo, &new.to_string(), &image, MAX_IMAGE)
+                .blob(repo, &new.to_string(), &image, MAX_IMAGE)
                 .unwrap()
                 .unwrap(),
             b"new-image"
         );
+        assert_eq!(std::fs::read(git_dir.join("index")).unwrap(), before_index);
+        assert_eq!(std::fs::read(git_dir.join("HEAD")).unwrap(), before_head);
+    }
+
+    #[test]
+    fn history_reads_a_new_pack_after_maintenance_and_keeps_the_copy() {
+        let (_directory, session, roots, old, new) = fixture();
+        let objects = session.repository.git_dir.path.join("objects");
+        let pack = objects.join("pack");
+        let repo = session.repository(&roots).unwrap();
+        assert_eq!(history(repo, &session.relative).unwrap().0.len(), 2);
+        {
+            let repo = Repository::open(&session.root).unwrap();
+            let mut builder = repo.packbuilder().unwrap();
+            builder.insert_commit(old).unwrap();
+            builder.insert_commit(new).unwrap();
+            builder.write(&pack, 0).unwrap();
+        }
+        for entry in std::fs::read_dir(&objects).unwrap() {
+            let entry = entry.unwrap();
+            let name = entry.file_name();
+            if name.len() == 2 && name.as_encoded_bytes().iter().all(u8::is_ascii_hexdigit) {
+                std::fs::remove_dir_all(entry.path()).unwrap();
+            }
+        }
+        let image = Path::new("images/example.png");
         assert_eq!(
-            std::fs::read(session.git_dir.join("index")).unwrap(),
-            before_index
+            session
+                .blob(repo, &old.to_string(), image, MAX_IMAGE)
+                .unwrap(),
+            Some(b"old-image".to_vec())
         );
+        for entry in std::fs::read_dir(&pack).unwrap() {
+            std::fs::remove_file(entry.unwrap().path()).unwrap();
+        }
+        let (items, truncated) = history(repo, &session.relative).unwrap();
+        assert!(!truncated);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, new.to_string());
         assert_eq!(
-            std::fs::read(session.git_dir.join("HEAD")).unwrap(),
-            before_head
+            session
+                .blob(repo, &new.to_string(), image, MAX_IMAGE)
+                .unwrap(),
+            Some(b"new-image".to_vec())
         );
     }
+
     #[test]
     fn rejects_unreturned_revisions_and_escaping_image_paths() {
         let (_directory, session, roots, _, _) = fixture();
         let repo = session.repository(&roots).unwrap();
         for revision in ["HEAD", "HEAD:secret.txt", "--help", "../../private"] {
             assert!(session
-                .blob(&repo, revision, &session.relative, MAX_TEXT)
+                .blob(repo, revision, &session.relative, MAX_TEXT)
                 .is_err());
         }
         for target in [
@@ -735,39 +806,43 @@ mod tests {
         session.commits.insert(id.to_string());
         let repo = session.repository(&roots).unwrap();
         assert!(session
-            .blob(&repo, &id.to_string(), &session.relative, MAX_TEXT)
+            .blob(repo, &id.to_string(), &session.relative, MAX_TEXT)
             .is_err());
         assert!(session
-            .blob(&repo, &id.to_string(), Path::new("missing.md"), MAX_TEXT)
+            .blob(repo, &id.to_string(), Path::new("missing.md"), MAX_TEXT)
             .unwrap()
             .is_none());
         assert!(read_allowed(&roots, &session.file, MAX_TEXT).is_err());
     }
     #[test]
     fn rejects_external_git_directories_and_alternates() {
-        let (_directory, session, roots, _, _) = fixture();
+        let (_directory, session, _, _, _) = fixture();
         std::fs::write(
-            session.git_dir.join("objects/info/alternates"),
+            session
+                .repository
+                .git_dir
+                .path
+                .join("objects/info/alternates"),
             "/outside/objects",
         )
         .unwrap();
-        assert!(session.repository(&roots).is_err());
+        assert!(open_test_repository(&session.root).is_err());
         let folder = tempfile::tempdir().unwrap();
         std::fs::write(folder.path().join(".git"), "gitdir: /outside/git").unwrap();
-        assert!(open_repository(&std::fs::canonicalize(folder.path()).unwrap(), None).is_err());
+        assert!(open_test_repository(&std::fs::canonicalize(folder.path()).unwrap()).is_err());
     }
     #[test]
     fn empty_and_untracked_paths_have_bounded_behavior() {
         let folder = tempfile::tempdir().unwrap();
         let root = std::fs::canonicalize(folder.path()).unwrap();
         Repository::init(&root).unwrap();
-        let (repo, _) = open_repository(&root, None).unwrap();
+        let repo = open_test_repository(&root).unwrap();
         assert!(history(&repo, Path::new("untracked.md"))
             .unwrap()
             .0
             .is_empty());
         commit(&Repository::open(&root).unwrap(), &root, "text", b"image");
-        let (repo, _) = open_repository(&root, None).unwrap();
+        let repo = open_test_repository(&root).unwrap();
         assert_eq!(
             history(&repo, Path::new("untracked.md")).unwrap().0.len(),
             1
@@ -788,7 +863,7 @@ mod tests {
         session.commits.insert(id.to_string());
         let repo = session.repository(&roots).unwrap();
         assert!(session
-            .blob(&repo, &id.to_string(), Path::new("guide.md"), MAX_TEXT)
+            .blob(repo, &id.to_string(), Path::new("guide.md"), MAX_TEXT)
             .is_err());
     }
     #[test]
@@ -864,44 +939,38 @@ mod tests {
     }
     #[test]
     fn reads_only_odb_without_config_includes_grafts_or_shallow() {
-        let (_directory, session, roots, _, _) = fixture();
+        let (_directory, session, _, _, _) = fixture();
+        let git_dir = &session.repository.git_dir.path;
         std::fs::write(
-            session.git_dir.join("config"),
+            git_dir.join("config"),
             "[include]\npath = /outside/huge\n[invalid config",
         )
         .unwrap();
-        std::fs::create_dir_all(session.git_dir.join("info")).unwrap();
+        std::fs::create_dir_all(git_dir.join("info")).unwrap();
         std::fs::write(
-            session.git_dir.join("info/grafts"),
+            git_dir.join("info/grafts"),
             vec![b'x'; MAX_OBJECT_METADATA + 1],
         )
         .unwrap();
-        std::fs::write(session.git_dir.join("shallow"), "invalid shallow data").unwrap();
-        let repo = session.repository(&roots).unwrap();
+        std::fs::write(git_dir.join("shallow"), "invalid shallow data").unwrap();
+        let repo = open_test_repository(&session.root).unwrap();
         assert_eq!(history(&repo, &session.relative).unwrap().0.len(), 2);
     }
     #[test]
     fn resolves_packed_heads_and_bounds_symbolic_references() {
-        let (_directory, session, roots, _, new) = fixture();
-        std::fs::write(session.git_dir.join("HEAD"), "ref: refs/heads/packed\n").unwrap();
+        let (_directory, session, _, _, new) = fixture();
+        let git_dir = &session.repository.git_dir.path;
+        std::fs::write(git_dir.join("HEAD"), "ref: refs/heads/packed\n").unwrap();
         std::fs::write(
-            session.git_dir.join("packed-refs"),
+            git_dir.join("packed-refs"),
             format!("{new} refs/heads/packed\n"),
         )
         .unwrap();
-        assert_eq!(session.repository(&roots).unwrap().head, Some(new));
-        std::fs::write(
-            session.git_dir.join("refs/heads/packed"),
-            "ref: refs/heads/loop\n",
-        )
-        .unwrap();
-        std::fs::write(
-            session.git_dir.join("refs/heads/loop"),
-            "ref: refs/heads/packed\n",
-        )
-        .unwrap();
-        assert!(session.repository(&roots).is_err());
-        std::fs::write(session.git_dir.join("HEAD"), vec![b'x'; 4097]).unwrap();
-        assert!(session.repository(&roots).is_err());
+        assert_eq!(open_test_repository(&session.root).unwrap().head, Some(new));
+        std::fs::write(git_dir.join("refs/heads/packed"), "ref: refs/heads/loop\n").unwrap();
+        std::fs::write(git_dir.join("refs/heads/loop"), "ref: refs/heads/packed\n").unwrap();
+        assert!(open_test_repository(&session.root).is_err());
+        std::fs::write(git_dir.join("HEAD"), vec![b'x'; 4097]).unwrap();
+        assert!(open_test_repository(&session.root).is_err());
     }
 }
