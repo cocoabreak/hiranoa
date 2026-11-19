@@ -479,18 +479,16 @@
         style:display={mode === "visual" ? "grid" : "none"}
       >
         <div
-          class="history-pane min-w-0 overflow-auto"
+          class="document-content history-pane min-w-0 overflow-auto"
           bind:this={leftPane}
           onscroll={() => scroll("left")}
         >
-          <div
-            class="history-version sticky top-0 z-10 border-b bg-background/95 px-3 py-2 text-xs"
-          >
+          <div class="history-version sticky top-0 z-10 border-b bg-background px-3 py-2 text-xs">
             {m.old} · {leftRevision.slice(0, 7)} · {#if leftSnapshot && !leftSnapshot.present}{m.unavailable}{/if}
           </div>
           <article
             bind:this={leftRoot}
-            class="markdown-body selectable-content history-document"
+            class="markdown-body selectable-content history-document isolate"
             style:font-size={`${settingsStore.settings.contentZoom}%`}
           ></article>
         </div>
@@ -502,18 +500,16 @@
             >{/if}
         </div>
         <div
-          class="history-pane min-w-0 overflow-auto"
+          class="document-content history-pane min-w-0 overflow-auto"
           bind:this={rightPane}
           onscroll={() => scroll("right")}
         >
-          <div
-            class="history-version sticky top-0 z-10 border-b bg-background/95 px-3 py-2 text-xs"
-          >
+          <div class="history-version sticky top-0 z-10 border-b bg-background px-3 py-2 text-xs">
             {m.next} · {rightRevision === "working" ? m.working : rightRevision.slice(0, 7)} · {#if rightSnapshot && !rightSnapshot.present}{m.unavailable}{/if}
           </div>
           <article
             bind:this={rightRoot}
-            class="markdown-body selectable-content history-document"
+            class="markdown-body selectable-content history-document isolate"
             style:font-size={`${settingsStore.settings.contentZoom}%`}
           ></article>
         </div>

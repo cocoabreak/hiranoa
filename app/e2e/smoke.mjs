@@ -63,6 +63,10 @@ try {
       `document.querySelector('[role="main"]')?.innerText.includes('smoke-marker')`
     );
     assert.equal((await state()).activeTab.renderMode, "full");
+    assert.equal(
+      await driver.evaluate("getComputedStyle(document.querySelector('.markdown-body')).contain"),
+      "paint"
+    );
   });
 
   await test("Markdown方言・リンク・数式の互換性を維持する", async () => {

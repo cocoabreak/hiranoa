@@ -833,7 +833,7 @@
     data-view-scope={paneId}
     tabindex="-1"
     role="main"
-    class="print-expand markdown-body flex-1 overflow-y-auto px-8 py-6"
+    class="print-expand document-content markdown-body flex-1 overflow-y-auto px-8 py-6"
     class:selectable-content={!isLoading && !!activeContent}
     style="scrollbar-gutter: stable; font-size: {settingsStore.settings.contentZoom}%"
     onclick={handleClick}

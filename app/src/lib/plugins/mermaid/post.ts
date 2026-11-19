@@ -105,11 +105,8 @@ async function renderOne(
   } finally {
     clearTimeout(timeout);
     if (!restricted) {
-      // Mermaidは描画用に d${id}（strict）または i${id}（sandbox）を
-      // document.body直下へ作る。構文エラーやタイムアウトでもレイアウトへ漏らさない。
-      // ${id} 自体は成功時に返されるSVGのIDなので、ここでは削除しない。
-      document.getElementById(`d${renderId}`)?.remove();
-      document.getElementById(`i${renderId}`)?.remove();
+      // The in-document renderer may still be measuring after the timeout.
+      document.getElementById(`${renderId}-render-host`)?.remove();
     }
   }
 }

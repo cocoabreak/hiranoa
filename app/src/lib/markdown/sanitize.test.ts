@@ -2,6 +2,15 @@ import { describe, it, expect } from "vitest";
 import { sanitizeHtml } from "./sanitize";
 
 describe("sanitizeHtml", () => {
+  it("ブラウザーの最前面レイヤーを操作する属性を除去し、本文を保持する", () => {
+    const result = sanitizeHtml(
+      '<div id="note" popover>補足</div>' +
+        '<button popovertarget="note" popovertargetaction="show">表示</button>' +
+        '<button commandfor="note" command="show-popover">表示</button>'
+    );
+    expect(result).toBe('<div id="note">補足</div><button>表示</button><button>表示</button>');
+  });
+
   it("表・行・セルの外部背景画像属性を除去し、表の内容を保持する", () => {
     const table =
       '<table background="https://example.com/table.png">' +
