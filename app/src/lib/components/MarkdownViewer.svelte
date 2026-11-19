@@ -57,7 +57,7 @@
   import {
     subscribeExternalImageApprovals,
     approveExternalImagesForDocument,
-    areExternalImagesApprovedForDocument,
+    mayLoadExternalImages,
   } from "$lib/stores/external-image-permission";
   import {
     documentKey,
@@ -287,10 +287,7 @@
     renderMarkdown(raw, renderOptions)
       .then((result) => {
         if (generation !== renderGeneration) return;
-        const mayLoadExternalImages =
-          imagePolicy === "allow" ||
-          (imagePolicy === "ask" && areExternalImagesApprovedForDocument(tabPath));
-        if (mayLoadExternalImages) {
+        if (mayLoadExternalImages(imagePolicy, tabPath)) {
           renderedHtml = result.html;
           externalImageCount = 0;
         } else {
@@ -405,10 +402,10 @@
       rootPath: explorerStore.rootPath,
       respectGitignore: settingsStore.settings.respectGitignore,
       locale: i18n.locale,
-      externalImagesAllowed:
-        settingsStore.settings.externalImagePolicy === "allow" ||
-        (settingsStore.settings.externalImagePolicy === "ask" &&
-          areExternalImagesApprovedForDocument(tab?.path ?? "")),
+      externalImagesAllowed: mayLoadExternalImages(
+        settingsStore.settings.externalImagePolicy,
+        tab?.path ?? ""
+      ),
       onExternalImagesBlocked: (count: number) => {
         if (tab?.path === activeTab?.path && renderGeneration === postRenderGeneration) {
           externalImageCount += count;
@@ -449,7 +446,9 @@
     applyIntrinsicImageSize(contentEl);
     cleanupLocalImages?.();
     cleanupLocalImages =
-      tab?.document && tab.source ? hydrateLocalImages(contentEl, tab.document, tab.source) : null;
+      tab?.document && tab.source
+        ? hydrateLocalImages(contentEl, tab.document, tab.source).cancel
+        : null;
   });
 
   // 現在地マッチにクラス付けする。scroll=trueのときのみビューを動かす
@@ -751,6 +750,7 @@
       contentEl,
       activeTab: {
         id: tab.id,
+        path: tab.path,
         nativePath:
           tab.document && tab.source ? nativeDocumentPath(tab.source, tab.document) : null,
         canOpenExternalEditor: !!tab.source?.capabilities.externalEditor,
@@ -758,7 +758,7 @@
         document: tab.document,
         source: tab.source,
       },
-      renderedHtml: renderError === null ? renderedHtml : null,
+      renderedHtml: !isLoading && renderError === null ? renderedHtml : null,
       renderMode: tab.renderMode ?? "full",
       viewMode: tab.viewMode ?? "rendered",
     });

@@ -52,7 +52,7 @@ describe("hydrateLocalImages", () => {
       (_, index) => `<img src="./${index}.png">`
     ).join("");
 
-    const cancel = hydrateLocalImages(container, documentRef, source);
+    const { cancel } = hydrateLocalImages(container, documentRef, source);
     await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(4));
     resolvers.shift()?.();
     await vi.waitFor(() => expect(invokeMock).toHaveBeenCalledTimes(5));
@@ -66,7 +66,7 @@ describe("hydrateLocalImages", () => {
     const container = document.createElement("div");
     container.innerHTML = '<img src="./image.png">';
 
-    const cancel = hydrateLocalImages(container, documentRef, source);
+    const { cancel } = hydrateLocalImages(container, documentRef, source);
     cancel();
     resolveRead?.("data:image/png;base64,x");
     await Promise.resolve();
@@ -79,7 +79,7 @@ describe("hydrateLocalImages", () => {
     const container = document.createElement("div");
     container.innerHTML = '<img src="./one.png"><img src="./two.png"><img src="./three.png">';
 
-    hydrateLocalImages(container, documentRef, source, 40);
+    hydrateLocalImages(container, documentRef, source, { maxDataUrlChars: 40 });
 
     await vi.waitFor(() => expect(invokeMock).toHaveBeenCalled());
     await vi.waitFor(() => {
@@ -88,5 +88,36 @@ describe("hydrateLocalImages", () => {
       );
       expect(hydrated.length).toBeLessThanOrEqual(1);
     });
+  });
+
+  it("HTML出力では同じdata URLを書き出す要素ごとに予算を消費する", async () => {
+    const dataUrl = "data:image/png;base64,1234567890";
+    invokeMock.mockResolvedValue(dataUrl);
+    const template = document.createElement("template");
+    template.innerHTML = '<img src="same.png"><img src="same.png">';
+    const { done } = hydrateLocalImages(template.content, documentRef, source, {
+      maxDataUrlChars: dataUrl.length,
+      forExport: true,
+    });
+    await done;
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(template.content.querySelector("img[src]")).toBeNull();
+  });
+
+  it("HTML出力には画像として識別できないファイルのデータを含めない", async () => {
+    invokeMock.mockResolvedValue("data:application/octet-stream;base64,AA==");
+    const template = document.createElement("template");
+    template.innerHTML = '<img src="file.txt" alt="Label">';
+    await hydrateLocalImages(template.content, documentRef, source, { forExport: true }).done;
+    expect(template.content.querySelector("img")?.outerHTML).toBe('<img alt="Label">');
+  });
+
+  it("大文字のURLスキームもローカル画像として解決しない", async () => {
+    const template = document.createElement("template");
+    template.innerHTML =
+      '<img src="HTTPS://example.invalid/image.png"><img src="DATA:image/png;base64,AA==">';
+    await hydrateLocalImages(template.content, documentRef, source, { forExport: true }).done;
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(template.content.querySelectorAll("img[src]")).toHaveLength(2);
   });
 });

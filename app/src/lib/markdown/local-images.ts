@@ -26,23 +26,19 @@ export function applyIntrinsicImageSize(container: HTMLElement): void {
  * 読み込み失敗・信頼ルート外はsrcを外して壊れ画像アイコン表示にする。
  */
 export function hydrateLocalImages(
-  container: HTMLElement,
+  container: HTMLElement | DocumentFragment,
   document: DocumentRef,
   source: DocumentSourceInfo,
-  maxDataUrlChars = MAX_LOCAL_IMAGE_DATA_URL_CHARS
-): () => void {
+  {
+    maxDataUrlChars = MAX_LOCAL_IMAGE_DATA_URL_CHARS,
+    forExport = false,
+  }: { maxDataUrlChars?: number; forExport?: boolean } = {}
+): { done: Promise<void[]>; cancel: () => void } {
   const images = Array.from(container.querySelectorAll<HTMLImageElement>("img"));
   const byPath = new Map<string, { document: DocumentRef; images: HTMLImageElement[] }>();
   for (const img of images) {
     const src = img.getAttribute("src") ?? "";
-    if (
-      !src ||
-      src.startsWith("http://") ||
-      src.startsWith("https://") ||
-      src.startsWith("data:")
-    ) {
-      continue;
-    }
+    if (!src || /^(?:https?:|data:)/i.test(src.trimStart())) continue;
     const resolved = resolveDocumentTarget(source, document, src);
     if (!resolved) {
       img.removeAttribute("src");
@@ -62,7 +58,7 @@ export function hydrateLocalImages(
   }
   const jobs = entries.slice(0, MAX_LOCAL_IMAGES_PER_DOCUMENT);
   let cancelled = false;
-  let budgetExhausted = false;
+  let budgetExhausted = maxDataUrlChars <= 0;
   let hydratedChars = 0;
   let nextIndex = 0;
 
@@ -74,12 +70,21 @@ export function hydrateLocalImages(
       try {
         const dataUrl = await invoke<string>("read_source_image", { document: resolved });
         if (cancelled) return;
-        if (budgetExhausted || dataUrl.length > maxDataUrlChars - hydratedChars) {
+        const storedChars = dataUrl.length * (forExport ? targets.length : 1);
+        if (forExport && !dataUrl.startsWith("data:image/")) continue;
+        if (forExport && !budgetExhausted && storedChars <= maxDataUrlChars - hydratedChars) {
+          // Do not serialize local files that the browser cannot render as images.
+          const probe = new Image();
+          probe.src = dataUrl;
+          await probe.decode();
+          if (cancelled) return;
+        }
+        if (budgetExhausted || storedChars > maxDataUrlChars - hydratedChars) {
           budgetExhausted = true;
           targets.forEach((img) => img.removeAttribute("src"));
           return;
         }
-        hydratedChars += dataUrl.length;
+        hydratedChars += storedChars;
         targets.forEach((img) => {
           if (img.parentNode) img.src = dataUrl;
         });
@@ -90,8 +95,10 @@ export function hydrateLocalImages(
   }
 
   const workerCount = Math.min(LOCAL_IMAGE_CONCURRENCY, jobs.length);
-  void Promise.all(Array.from({ length: workerCount }, () => worker()));
-  return () => {
-    cancelled = true;
+  return {
+    done: Promise.all(Array.from({ length: workerCount }, () => worker())),
+    cancel: () => {
+      cancelled = true;
+    },
   };
 }

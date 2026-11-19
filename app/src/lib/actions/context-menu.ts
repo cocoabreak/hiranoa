@@ -11,6 +11,7 @@ interface ViewerContextMenuParams {
   contentEl: HTMLElement;
   activeTab: {
     id?: string;
+    path: string;
     nativePath?: string | null;
     canOpenExternalEditor: boolean;
     title: string;
@@ -120,7 +121,7 @@ export async function showViewerContextMenu(params: ViewerContextMenuParams): Pr
       items.push(
         await MenuItem.new({
           text: m.contextMenu.saveAsHtml,
-          action: () => saveAsHtml(activeTab.title, renderedHtml),
+          action: () => saveAsHtml(activeTab, renderedHtml),
         })
       );
     }
