@@ -1,11 +1,11 @@
 import { logicalElementId } from "./view-dom";
 import type { TocHeading } from "$lib/types";
 import {
+  createHeadingIdAllocator,
   decodeHeadingAnchor,
   headingBaseId,
   headingInlineCodeText,
   headingReferenceMatches,
-  uniqueHeadingId,
 } from "$lib/markdown/heading-anchor";
 
 function headingAnchorText(element: Element): string {
@@ -30,20 +30,14 @@ function headingAnchorText(element: Element): string {
  */
 export function buildToc(container: HTMLElement): TocHeading[] {
   const els = container.querySelectorAll("h1,h2,h3,h4,h5,h6");
-  const usedIds = new Set<string>();
+  const allocateId = createHeadingIdAllocator();
 
   return Array.from(els).map((el, i) => {
     const level = parseInt(el.tagName[1]);
     const text = el.textContent?.trim() ?? "";
 
-    if (el.id) el.id = logicalElementId(el);
-    if (!el.id) {
-      el.id = uniqueHeadingId(headingBaseId(headingAnchorText(el), i), usedIds);
-    } else if (usedIds.has(el.id)) {
-      el.id = uniqueHeadingId(el.id, usedIds);
-    }
-
-    usedIds.add(el.id);
+    const explicitId = el.id ? logicalElementId(el) : "";
+    el.id = allocateId(explicitId || headingBaseId(headingAnchorText(el), i));
     return { level, text, id: el.id };
   });
 }

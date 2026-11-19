@@ -3,10 +3,10 @@ import footnote from "markdown-it-footnote";
 import { extractFrontmatter } from "$lib/markdown/frontmatter";
 import { basename } from "$lib/utils";
 import {
+  createHeadingIdAllocator,
   decodeHeadingAnchor,
   headingBaseId,
   headingInlineCodeText,
-  uniqueHeadingId,
 } from "$lib/markdown/heading-anchor";
 
 const MAX_TEXT_CHARS = 256;
@@ -133,7 +133,7 @@ function extractExcerpt(
   let heading: string | null = null;
   let collect = !wanted;
   const parts: string[] = [];
-  const usedHeadingIds = new Set<string>();
+  const allocateId = createHeadingIdAllocator();
   let headingIndex = 0;
 
   for (let index = 0; index < tokens.length; index++) {
@@ -142,11 +142,7 @@ function extractExcerpt(
       const inline = tokens[index + 1]?.type === "inline" ? tokens[index + 1] : null;
       const headingText = inline ? inlineText(inline, true) : "";
       const headingAnchorText = inline ? inlineText(inline, true, true) : "";
-      const slug = uniqueHeadingId(
-        headingBaseId(headingAnchorText, headingIndex++),
-        usedHeadingIds
-      );
-      usedHeadingIds.add(slug);
+      const slug = allocateId(headingBaseId(headingAnchorText, headingIndex++));
       if (wanted && slug === wanted) {
         heading = headingText;
         collect = true;
