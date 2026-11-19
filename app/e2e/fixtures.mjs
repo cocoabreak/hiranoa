@@ -136,6 +136,7 @@ export function createFixtures(root) {
       String.raw`$\frac{1}{2}$`,
       "www.example.com user@example.com https://example.com/。次の文",
       "[local](guide/index.md) [[guide/index|Local Wiki]]",
+      '<map name="compatibility-map"><area alt="Local guide" href="guide/index.md"></map>',
     ].join("\n\n")
   );
   writeFileSync(atLimit, fixedSizeMarkdown(LARGE_MARKDOWN_BYTES, "At limit"));

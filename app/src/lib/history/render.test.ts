@@ -25,4 +25,14 @@ describe("history resource isolation", () => {
     expect(template.content.querySelector('use[href="#symbol"]')).not.toBeNull();
     expect(result.blockedCount).toBe(2);
   });
+  it("keeps image-map anchors in the comparison and removes other browser destinations", () => {
+    const result = protectHistoryResources(
+      '<map><area href="other.md"><area href="#heading"></map><svg><a xlink:href="other.md"><rect/></a></svg>'
+    );
+    const template = document.createElement("template");
+    template.innerHTML = result.html;
+    expect(template.content.querySelector("area")?.hasAttribute("href")).toBe(false);
+    expect(template.content.querySelector('area[href="#heading"]')).not.toBeNull();
+    expect(template.content.querySelector("svg a")?.hasAttribute("xlink:href")).toBe(false);
+  });
 });

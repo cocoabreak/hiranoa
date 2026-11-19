@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import {
   WebView2Driver,
   findFreePort,
@@ -97,6 +97,38 @@ try {
     assert.ok(result.links.includes("http://www.example.com"));
     assert.ok(result.links.includes("mailto:user@example.com"));
     assert.equal(result.cjkLink, "https://example.com/");
+    assert.equal(
+      await driver.evaluate(`document.querySelector('.markdown-body area[href="guide/index.md"]').dispatchEvent(
+        new MouseEvent('auxclick', { bubbles: true, cancelable: true, button: 1 })
+      )`),
+      false
+    );
+  });
+
+  await test("WebViewがアプリ画面外への直接遷移とポップアップを拒否する", async () => {
+    const appPage = await driver.evaluate("location.href");
+    const externalPage = `http://127.0.0.1:${await findFreePort()}/navigation-check`;
+    const client = await driver.connect();
+    try {
+      for (const url of [
+        externalPage,
+        new URL("/link-graph", appPage).href,
+        pathToFileURL(fixtures.basic).href,
+      ]) {
+        const result = await client.send("Page.navigate", { url });
+        assert.equal(result.errorText, "net::ERR_ABORTED", url);
+      }
+      const popup = await client.send("Runtime.evaluate", {
+        expression: `window.open(${JSON.stringify(externalPage)}) === null`,
+        userGesture: true,
+        returnByValue: true,
+      });
+      assert.equal(popup.result.value, true);
+      assert.equal(await driver.evaluate("location.href"), appPage);
+      assert.equal((await driver.targets()).filter((target) => target.type === "page").length, 1);
+    } finally {
+      client.close();
+    }
   });
 
   await test("正常なMermaidをSVG表示できる", async () => {
@@ -346,6 +378,14 @@ try {
       }
     });
   }
+
+  await test("Wikiリンクで文書を開ける", async () => {
+    await open("openMarkdownFile", fixtures.compatibility);
+    const wiki = '.markdown-body .wiki-link[data-wiki-target="guide/index"][href]';
+    await driver.waitFor(`document.querySelector(${JSON.stringify(wiki)}) !== null`);
+    assert.equal(await driver.click(wiki), "OK");
+    await driver.waitFor("window.__e2e.getState().activeTab.path.endsWith(':guide%2Findex.md')");
+  });
 
   await test("5 MiB境界で安全モードへ切り替わる", async () => {
     await open("openMarkdownFile", fixtures.belowLimit);
