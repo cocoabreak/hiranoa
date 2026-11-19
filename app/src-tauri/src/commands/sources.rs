@@ -683,15 +683,15 @@ fn resolve_directory_index(
 ) -> Result<String, String> {
     let relative = normalize_virtual_path(path)?;
     let is_directory = match backend {
-        SourceBackend::Native(source) => match std::fs::metadata(source.root.join(&relative)) {
-            Ok(metadata) if metadata.is_dir() => {
-                resolve_native_path(source, &relative, roots)?;
-                true
+        SourceBackend::Native(source) => {
+            match roots.inspect_allowed_path(&source.root.join(&relative).to_string_lossy())? {
+                Some((canonical, metadata)) if metadata.is_dir() => {
+                    ensure_native_source_path(source, &canonical)?;
+                    true
+                }
+                _ => false,
             }
-            Ok(_) => false,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
-            Err(error) => return Err(format!("リンク先を確認できませんでした: {error}")),
-        },
+        }
         SourceBackend::Zip(source) => {
             relative.is_empty()
                 || source
@@ -707,8 +707,10 @@ fn resolve_directory_index(
             format!("{relative}/index.md")
         };
         if let SourceBackend::Native(source) = backend {
-            if std::fs::symlink_metadata(source.root.join(&index)).is_ok() {
-                resolve_native_path(source, &index, roots)?;
+            if let Some((canonical, _)) =
+                roots.inspect_allowed_path(&source.root.join(&index).to_string_lossy())?
+            {
+                ensure_native_source_path(source, &canonical)?;
             }
         }
         Ok(index)
@@ -717,12 +719,19 @@ fn resolve_directory_index(
     }
 }
 
-fn is_markdown_link_candidate(backend: &SourceBackend, path: &str, raw_target: &str) -> bool {
+fn is_markdown_link_candidate(
+    backend: &SourceBackend,
+    path: &str,
+    raw_target: &str,
+    roots: &AllowedRoots,
+) -> bool {
     if is_markdown_virtual_path(path) {
         return true;
     }
     let is_file = match backend {
-        SourceBackend::Native(source) => source.root.join(path).is_file(),
+        SourceBackend::Native(source) => roots
+            .inspect_allowed_path(&source.root.join(path).to_string_lossy())
+            .is_ok_and(|result| result.is_some_and(|(_, metadata)| metadata.is_file())),
         SourceBackend::Zip(source) => source
             .entries
             .get(path)
@@ -1224,11 +1233,12 @@ fn list_native_entries(
     respect_gitignore: bool,
     roots: &AllowedRoots,
 ) -> Result<Vec<SourceEntry>, String> {
-    let directory = resolve_native_path(source, &document.path, roots)?;
     let virtual_directory = normalize_virtual_path(&document.path)?;
-    if !directory.is_dir() {
-        return Err("フォルダーを指定してください".to_string());
-    }
+    let (directory, _) = roots
+        .inspect_allowed_path(&source.root.join(&virtual_directory).to_string_lossy())?
+        .filter(|(_, metadata)| metadata.is_dir())
+        .ok_or_else(|| "フォルダーを指定してください".to_string())?;
+    ensure_native_source_path(source, &directory)?;
     Ok(
         read_dir_single_level(&directory, respect_gitignore, Some(roots))
             .into_iter()
@@ -1335,10 +1345,10 @@ pub fn register_native_source(
     roots: State<'_, AllowedRoots>,
     registry: State<'_, SourceRegistry>,
 ) -> Result<DocumentSourceInfo, String> {
-    let root = roots.resolve(&root_path)?;
-    if !root.is_dir() {
-        return Err("フォルダーを指定してください".to_string());
-    }
+    let (root, _) = roots
+        .inspect_allowed_path(&root_path)?
+        .filter(|(_, metadata)| metadata.is_dir())
+        .ok_or_else(|| "フォルダーを指定してください".to_string())?;
     registry.register_native(root)
 }
 
@@ -1348,10 +1358,10 @@ pub fn register_native_document_source(
     roots: State<'_, AllowedRoots>,
     registry: State<'_, SourceRegistry>,
 ) -> Result<(DocumentSourceInfo, DocumentRef), String> {
-    let file = roots.resolve(&path)?;
-    if !file.is_file() {
-        return Err("ファイルを指定してください".to_string());
-    }
+    let (file, _) = roots
+        .inspect_allowed_path(&path)?
+        .filter(|(_, metadata)| metadata.is_file())
+        .ok_or_else(|| "ファイルを指定してください".to_string())?;
     let root = file
         .parent()
         .ok_or_else(|| "親フォルダーを特定できません".to_string())?
@@ -1469,12 +1479,11 @@ fn read_native_link_preview(
         return Err("Markdownファイル（.md / .markdown）のみプレビューできます".to_string());
     }
     let candidate = source.root.join(&relative);
-    match std::fs::symlink_metadata(&candidate) {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+    match roots.inspect_allowed_path(&candidate.to_string_lossy())? {
+        Some((canonical, _)) => ensure_native_source_path(source, &canonical)?,
+        None => {
             return Ok(LinkPreviewReadResponse::Missing { source_generation });
         }
-        Err(error) => return Err(format!("プレビュー対象を確認できませんでした: {error}")),
     }
     let (file, canonical) = crate::commands::file::trusted_paths::open_allowed_file(
         roots,
@@ -1636,7 +1645,7 @@ fn read_resolved_link_preview(
     };
     if !is_markdown_virtual_path(&target.path) {
         return Ok(
-            if is_markdown_link_candidate(backend, &target.path, &raw_target) {
+            if is_markdown_link_candidate(backend, &target.path, &raw_target, roots) {
                 LinkPreviewReadResponse::Missing { source_generation }
             } else {
                 LinkPreviewReadResponse::Excluded { source_generation }
@@ -1765,9 +1774,10 @@ fn collect_source_markdown_paths_with_status(
                 let entry =
                     entry.map_err(|error| format!("Markdown一覧の走査に失敗しました: {error}"))?;
                 let path = entry.path();
-                if !path.is_file()
-                    || !crate::commands::has_markdown_extension(path)
-                    || roots.resolve(&path.to_string_lossy()).is_err()
+                if !crate::commands::has_markdown_extension(path)
+                    || !roots
+                        .inspect_allowed_path(&path.to_string_lossy())
+                        .is_ok_and(|result| result.is_some_and(|(_, metadata)| metadata.is_file()))
                 {
                     continue;
                 }
@@ -2259,23 +2269,16 @@ fn validate_image_reference(
     match backend {
         SourceBackend::Native(source) => {
             let candidate = source.root.join(&path);
-            match std::fs::symlink_metadata(&candidate) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                    return Some(ReferenceProblemStatus::Missing);
-                }
-                Err(_) => return Some(ReferenceProblemStatus::Unverifiable),
-                Ok(_) => {}
-            }
-            let canonical = match std::fs::canonicalize(&candidate) {
-                Ok(canonical) if !canonical.starts_with(&source.root) => {
-                    return Some(ReferenceProblemStatus::OutsideSource);
-                }
-                Err(_) => return Some(ReferenceProblemStatus::Unverifiable),
-                Ok(canonical) => canonical,
-            };
-            if native_image_mime_type(&canonical).is_none()
-                || !std::fs::metadata(&canonical).is_ok_and(|metadata| metadata.is_file())
-            {
+            let (canonical, metadata) =
+                match roots.inspect_share_checked_path(&candidate.to_string_lossy()) {
+                    Ok(Some((canonical, _))) if !canonical.starts_with(&source.root) => {
+                        return Some(ReferenceProblemStatus::OutsideSource);
+                    }
+                    Ok(Some(found)) => found,
+                    Ok(None) => return Some(ReferenceProblemStatus::Missing),
+                    Err(_) => return Some(ReferenceProblemStatus::Unverifiable),
+                };
+            if !metadata.is_file() || native_image_mime_type(&canonical).is_none() {
                 return Some(ReferenceProblemStatus::Unverifiable);
             }
             match crate::commands::file::trusted_paths::open_allowed_file(
@@ -2394,7 +2397,7 @@ fn resolve_markdown_link(
             return MarkdownLinkResolution::Resolved(actual.clone());
         }
     }
-    if is_markdown_link_candidate(backend, &resolved, &combined) {
+    if is_markdown_link_candidate(backend, &resolved, &combined, roots) {
         MarkdownLinkResolution::Missing
     } else {
         MarkdownLinkResolution::Excluded

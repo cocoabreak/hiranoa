@@ -1,6 +1,6 @@
 use super::normalize_path_for_display;
 use super::persistent_trust::{persist_explorer_root, PersistentExplorerRoot};
-use super::trusted_paths::{dangerous_root_reason, AllowedRoots, ShareQuery};
+use super::trusted_paths::{dangerous_root_reason, inspect_path, AllowedRoots, ShareQuery};
 use crate::commands::has_markdown_extension;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -221,7 +221,7 @@ pub async fn authorize_folder_path(
         ShareQuery::Trusted(canonical) => (canonical, false),
         ShareQuery::Confirmed(canonical) => (canonical, true),
     };
-    if !root.is_dir() {
+    if !inspect_path(&root)?.is_some_and(|(_, metadata)| metadata.is_dir()) {
         return Err("フォルダーを指定してください".to_string());
     }
     if let Some(reason) = dangerous_root_reason(&root) {

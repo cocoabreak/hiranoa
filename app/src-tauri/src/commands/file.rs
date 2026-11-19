@@ -9,6 +9,8 @@ mod persistent_trust;
 pub(crate) mod readers;
 pub(crate) mod safe_outline;
 pub(crate) mod trusted_paths;
+#[cfg(windows)]
+mod windows_open;
 mod windows_share;
 
 pub use dialogs::NativeDialogState;
