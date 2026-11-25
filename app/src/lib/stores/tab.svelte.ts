@@ -1,18 +1,9 @@
 import { createPaneScopedStore, workspaceStore, MAX_WORKSPACE_TABS } from "./workspace.svelte";
-import {
-  hasPendingSource,
-  hasPendingPath,
-  reconcileDocumentResource,
-} from "$lib/document-resources";
+import { documentWatch, releaseUnusedWatch } from "$lib/document-resources";
 import type { ScrollPositions } from "./session-ui-state.svelte";
 import { contentStore } from "$lib/stores/content.svelte";
 import type { Tab } from "$lib/types";
-import {
-  nativeDocumentIdentity,
-  nativeDocumentPath,
-  nativePathsEqual,
-} from "$lib/document-sources";
-import { explorerStore } from "$lib/stores/explorer.svelte";
+import { nativeDocumentIdentity, nativePathsEqual } from "$lib/document-sources";
 import { sessionUiStateStore } from "$lib/stores/session-ui-state.svelte";
 
 const MAX_RECENTLY_CLOSED_TABS = 10;
@@ -92,31 +83,8 @@ export function createTabStore(paneId?: string) {
       if (!allTabs().some((candidate) => candidate.path === tab.path))
         contentStore.delete(tab.path);
       if (tab.document && tab.source) {
-        const source = tab.source;
-        const nativePath = nativeDocumentPath(source, tab.document);
-        if (nativePath) {
-          const identity = nativeDocumentIdentity(source, tab.document);
-          await reconcileDocumentResource(
-            nativePath,
-            () =>
-              hasPendingPath(nativePath) ||
-              allTabs().some(
-                (candidate) =>
-                  !!candidate.document &&
-                  !!candidate.source &&
-                  nativeDocumentIdentity(candidate.source, candidate.document) === identity
-              )
-          );
-        } else if (source.kind === "zip") {
-          await reconcileDocumentResource(
-            source.nativePath,
-            () =>
-              hasPendingSource(source.id) ||
-              explorerStore.source?.id === source.id ||
-              allTabs().some((candidate) => candidate.source?.id === source.id),
-            source.id
-          );
-        }
+        const watch = documentWatch(tab.source, tab.document);
+        if (watch) await releaseUnusedWatch(watch, allTabs);
       }
     } finally {
       closingIds.delete(id);

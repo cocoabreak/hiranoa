@@ -136,7 +136,7 @@
         <div class="p-2 text-xs text-destructive">
           {globalSearchStore.error}
         </div>
-      {:else if globalSearchStore.results.length > 0}
+      {:else if globalSearchStore.results.length > 0 || globalSearchStore.truncated}
         <div class="space-y-4">
           {#if globalSearchStore.truncated}
             <p class="rounded bg-muted px-2 py-1 text-[11px] text-muted-foreground">

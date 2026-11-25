@@ -9,7 +9,9 @@ vi.mock("$lib/actions/file-actions", () => ({
   openSourceMarkdown: vi.fn(),
 }));
 
-vi.mock("$lib/document-sources", () => ({
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("$lib/document-sources", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("$lib/document-sources")>()),
   documentKey: (document: { sourceId: string; path: string }) =>
     `${document.sourceId}:${document.path}`,
   getRememberedDocument: (key: string) =>

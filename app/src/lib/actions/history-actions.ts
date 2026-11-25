@@ -1,14 +1,10 @@
 import { captureOpenTarget } from "./workspace-actions";
+import { withRegisteredArchive } from "$lib/document-resources";
 import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { historyStore } from "$lib/stores/history.svelte";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { openMarkdownFile, openSourceMarkdown } from "$lib/actions/file-actions";
-import {
-  documentKey,
-  getRememberedDocument,
-  registerZipSource,
-  rememberDocument,
-} from "$lib/document-sources";
+import { documentKey, getRememberedDocument, rememberDocument } from "$lib/document-sources";
 
 /**
  * 履歴上を1つ戻る（-1）/進む（1）。
@@ -41,12 +37,17 @@ export async function navigateHistory(direction: 1 | -1): Promise<void> {
           if (remembered.source.kind !== "zip") throw error;
           // Explorerと最後のタブを閉じるとZIP索引は解放される。履歴から戻る場合は、
           // 既に許可済みのアーカイブを再登録して新しいSource IDへ履歴を付け替える。
-          const source = await registerZipSource(remembered.source.nativePath);
-          const document = { sourceId: source.id, path: remembered.document.path };
-          const restoredPath = documentKey(document);
-          rememberDocument(document, source);
-          history.replaceCurrent(restoredPath);
-          await openSourceMarkdown(document, source, undefined, target);
+          await withRegisteredArchive(
+            remembered.source.nativePath,
+            () => tabStore.allTabs,
+            async (source) => {
+              const document = { sourceId: source.id, path: remembered.document.path };
+              const restoredPath = documentKey(document);
+              rememberDocument(document, source);
+              history.replaceCurrent(restoredPath);
+              await openSourceMarkdown(document, source, undefined, target);
+            }
+          );
         }
       } else {
         await openMarkdownFile(path, target);

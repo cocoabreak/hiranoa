@@ -1,4 +1,4 @@
-import { hasPendingSource, reconcileDocumentResource } from "$lib/document-resources";
+import { releaseArchive } from "$lib/document-resources";
 import { invoke } from "@tauri-apps/api/core";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { settingsStore } from "$lib/stores/settings.svelte";
@@ -104,23 +104,9 @@ export async function reloadFolderTree(): Promise<void> {
 
 /** ルートフォルダを閉じ、不要になったディレクトリ監視をすべて解除する */
 export async function closeFolder(): Promise<void> {
-  const archiveSource = explorerStore.source?.kind === "zip" ? explorerStore.source : null;
+  const source = explorerStore.source;
   explorerStore.clear();
-  if (
-    archiveSource &&
-    !tabStore.allTabs.some(
-      (tab) => tab.source?.kind === "zip" && tab.source.id === archiveSource.id
-    )
-  ) {
-    await reconcileDocumentResource(
-      archiveSource.nativePath,
-      () =>
-        hasPendingSource(archiveSource.id) ||
-        explorerStore.source?.id === archiveSource.id ||
-        tabStore.allTabs.some((tab) => tab.source?.id === archiveSource.id),
-      archiveSource.id
-    );
-  }
+  await releaseArchive(source, () => tabStore.allTabs);
   await syncDirWatches();
 }
 

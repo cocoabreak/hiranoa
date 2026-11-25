@@ -61,6 +61,35 @@ describe("GlobalSearchStore", () => {
     expect(store.isSearching).toBe(false);
   });
 
+  it("clears a partial result and ignores any pending response after an empty search", async () => {
+    const store = new GlobalSearchStore();
+    const current = source("current");
+    explorerStore.setRoot(current.nativePath, [], current);
+    store.query = "needle";
+    vi.mocked(invoke).mockResolvedValueOnce({ results: [], truncated: true, cancelled: false });
+    await store.search();
+    expect(store.truncated).toBe(true);
+    store.query = "";
+    await store.search();
+    expect(store.truncated).toBe(false);
+
+    let finish!: (value: unknown) => void;
+    vi.mocked(invoke).mockReturnValueOnce(
+      new Promise((resolve) => {
+        finish = resolve;
+      })
+    );
+    store.query = "needle";
+    const pending = store.search();
+    store.query = "";
+    await store.search();
+    finish({ results: [result(current.id)], truncated: true, cancelled: false });
+    await pending;
+    expect(store.results).toEqual([]);
+    expect(store.truncated).toBe(false);
+    expect(store.isSearching).toBe(false);
+  });
+
   it("現在のExplorerと異なるソースの結果は開かずページ内検索も開始しない", async () => {
     const store = new GlobalSearchStore();
     const current = source("source-b");

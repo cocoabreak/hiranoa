@@ -1,4 +1,4 @@
-import { fireEvent, render } from "@testing-library/svelte";
+import { fireEvent, render, waitFor } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { openSourceMarkdown } from "$lib/actions/file-actions";
 import LinkInspectorPanel from "$lib/components/LinkInspectorPanel.svelte";
@@ -71,7 +71,7 @@ describe("LinkInspectorPanel", () => {
             rawTarget: null,
             anchor: null,
             kind: "wiki",
-            referenceCount: 1,
+            referenceCount: 3,
           },
         ],
         total: 1,
@@ -133,12 +133,22 @@ describe("LinkInspectorPanel", () => {
     );
 
     await fireEvent.click(view.getByRole("tab", { name: /Incoming/ }));
-    await fireEvent.click(view.getByRole("button", { name: /referrer\.md/ }));
+    const referrer = view.getByRole("button", { name: /referrer\.md/ });
+    expect(referrer).toHaveTextContent("3");
+    await fireEvent.click(referrer);
     expect(openSourceMarkdown).toHaveBeenLastCalledWith(
       { sourceId: source.id, path: "guide/referrer.md" },
       source,
       undefined,
       expect.objectContaining({ paneId: "primary", valid: expect.any(Function) })
+    );
+
+    await fireEvent.click(view.getByRole("button", { name: "Refresh links" }));
+    await waitFor(() =>
+      expect(invokeMock).toHaveBeenCalledWith(
+        "get_source_link_context",
+        expect.objectContaining({ document: current, forceRefresh: true })
+      )
     );
 
     await fireEvent.click(view.getByRole("tab", { name: /Problems/ }));

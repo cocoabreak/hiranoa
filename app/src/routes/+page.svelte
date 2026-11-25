@@ -36,7 +36,7 @@
     openMarkdownFile,
     openSourceMarkdown,
   } from "$lib/actions/file-actions";
-  import { nativeDocumentPath, nativePathsEqual } from "$lib/document-sources";
+  import { watchedDocuments } from "$lib/document-resources";
   import { captureOpenTarget } from "$lib/actions/workspace-actions";
   import { refreshDocumentViews } from "$lib/actions/refresh-document-views";
   import { SerializedTaskQueue } from "$lib/serialized-task-queue";
@@ -548,16 +548,11 @@
         linkInspectorStore.invalidate();
         linkPreviewStore.invalidateAll();
         const changedPath = event.payload;
-        const normalizedChangedPath = normalizePath(changedPath);
         try {
-          const zipSources = new Map(
-            [explorerStore.source, ...tabStore.allTabs.map((tab) => tab.source)]
-              .filter(
-                (source) =>
-                  source?.kind === "zip" &&
-                  nativePathsEqual(source.nativePath, normalizedChangedPath)
-              )
-              .map((source) => [source!.id, source!])
+          const { archives: zipSources, nativeTabs } = watchedDocuments(
+            changedPath,
+            tabStore.allTabs,
+            explorerStore.source
           );
           if (zipSources.size > 0) {
             await Promise.all(
@@ -596,17 +591,7 @@
             );
             return;
           }
-          const matchingTabs = tabStore.allTabs.filter(
-            (candidate) =>
-              !!candidate.document &&
-              !!candidate.source &&
-              !!nativeDocumentPath(candidate.source, candidate.document) &&
-              nativePathsEqual(
-                nativeDocumentPath(candidate.source, candidate.document)!,
-                normalizedChangedPath
-              )
-          );
-          await refreshDocumentViews(matchingTabs);
+          await refreshDocumentViews(nativeTabs);
         } catch {
           // 読み込み失敗時は無視
         }
@@ -618,33 +603,14 @@
         linkInspectorStore.invalidate();
         linkPreviewStore.invalidateAll();
         const deletedPath = event.payload;
-        const normalizedDeletedPath = normalizePath(deletedPath);
-        const deletedArchiveSourceIds = new Set(
-          [explorerStore.source, ...tabStore.allTabs.map((tab) => tab.source)]
-            .filter(
-              (source) =>
-                source?.kind === "zip" && nativePathsEqual(source.nativePath, normalizedDeletedPath)
-            )
-            .map((source) => source!.id)
+        const { archives, nativeTabs } = watchedDocuments(
+          deletedPath,
+          tabStore.allTabs,
+          explorerStore.source
         );
-        if (deletedArchiveSourceIds.size > 0) {
-          for (const archiveTab of tabStore.allTabs.filter((candidate) =>
-            deletedArchiveSourceIds.has(candidate.source?.id ?? "")
-          )) {
-            tabStore.updateTab(archiveTab.id, { status: "deleted" });
-          }
-          return;
-        }
-        const matchingTabs = tabStore.allTabs.filter(
-          (candidate) =>
-            !!candidate.document &&
-            !!candidate.source &&
-            !!nativeDocumentPath(candidate.source, candidate.document) &&
-            nativePathsEqual(
-              nativeDocumentPath(candidate.source, candidate.document)!,
-              normalizedDeletedPath
-            )
-        );
+        const matchingTabs = archives.size
+          ? tabStore.allTabs.filter((tab) => tab.source && archives.has(tab.source.id))
+          : nativeTabs;
         for (const tab of matchingTabs) {
           tabStore.updateTab(tab.id, { status: "deleted" });
         }

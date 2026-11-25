@@ -233,7 +233,6 @@ export const en: typeof ja = {
   sidebar: {
     explorer: "Explorer",
     search: "Search",
-    backlinks: "Backlinks",
     links: "Links",
     recentFolders: "Recent folders",
     recentArchives: "Recent archives",
@@ -295,18 +294,7 @@ export const en: typeof ja = {
     useRegex: "Use regular expression",
     searching: "Searching...",
     noResults: "No results found",
-    resultsLimited: "Too many results; showing the first 5,000 matches",
-  },
-  backlinks: {
-    title: "Backlinks",
-    refresh: "Refresh backlinks",
-    openDocument: "Open a Markdown document to view backlinks",
-    pluginDisabled: "Enable Wiki Links in settings to view backlinks",
-    unavailable: "Backlinks are unavailable for this source",
-    loading: "Indexing backlinks...",
-    failed: (error: unknown) => `Could not load backlinks: ${String(error)}`,
-    resultsLimited: "Only some backlinks are shown because the processing limit was reached",
-    noResults: "No Wiki Links refer to this document",
+    resultsLimited: "Search reached its processing limit. Results may be incomplete.",
   },
   links: {
     title: "Links",

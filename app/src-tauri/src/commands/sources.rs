@@ -10,7 +10,6 @@ use crate::commands::file::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
-use regex::RegexBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -22,10 +21,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{State, WebviewWindow};
 
-use super::search::{SearchMatch, SearchState};
 use super::window::{LinkGraphWindowState, LINK_GRAPH_WINDOW_LABEL, MAIN_WINDOW_LABEL};
 
 pub mod metadata;
+pub mod search;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
@@ -115,10 +114,6 @@ const MAX_ARCHIVE_PATH_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARCHIVE_ANCESTOR_BYTES: usize = 64 * 1024 * 1024;
 const MAX_SEARCH_TOTAL_BYTES: usize = 100 * 1024 * 1024;
 const MAX_SEARCH_TOTAL_COMPRESSED_BYTES: u64 = 100 * 1024 * 1024;
-const MAX_SEARCH_RESULTS: usize = 1_000;
-const MAX_MATCHES_PER_FILE: usize = 1_000;
-const MAX_TOTAL_MATCHES: usize = 5_000;
-const MAX_LINE_PREVIEW_CHARS: usize = 100;
 const MAX_BACKLINK_REFERENCES: usize = 100_000;
 const MAX_BACKLINK_CANDIDATE_INSPECTIONS: usize = 1_000_000;
 const MAX_CACHED_BACKLINK_INDEXES: usize = 4;
@@ -184,45 +179,6 @@ pub struct ZipSource {
 pub enum SourceBackend {
     Native(NativeSource),
     Zip(ZipSource),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceSearchOptions {
-    query: String,
-    is_regex: bool,
-    case_sensitive: bool,
-    show_hidden_files: bool,
-    respect_gitignore: bool,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SourceSearchResult {
-    document: DocumentRef,
-    file_path: String,
-    matches: Vec<SearchMatch>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct SourceSearchResponse {
-    results: Vec<SourceSearchResult>,
-    truncated: bool,
-    cancelled: bool,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct BacklinkResult {
-    document: DocumentRef,
-    file_path: String,
-    reference_count: usize,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub struct BacklinkResponse {
-    results: Vec<BacklinkResult>,
-    truncated: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, Hash)]
@@ -1941,21 +1897,6 @@ fn read_source_text(
         .ok_or_else(|| "Markdownファイルは10MiB以下にしてください".to_string())
 }
 
-fn truncate_search_preview(line: &str) -> String {
-    let trimmed = line.trim();
-    if trimmed.chars().count() > MAX_LINE_PREVIEW_CHARS {
-        format!(
-            "{}...",
-            trimmed
-                .chars()
-                .take(MAX_LINE_PREVIEW_CHARS)
-                .collect::<String>()
-        )
-    } else {
-        trimmed.to_string()
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ExtractedDocumentLink {
     raw_target: String,
@@ -2443,6 +2384,49 @@ struct AggregatedLinkKey {
     kind: DocumentLinkKind,
 }
 
+struct LinkCandidates {
+    paths: Vec<String>,
+    wiki: super::wiki::WikiFileIndex,
+    exact_paths: HashSet<String>,
+    native_paths_lower: HashMap<String, String>,
+    truncated: bool,
+}
+
+impl LinkCandidates {
+    fn collect(
+        backend: &SourceBackend,
+        roots: &AllowedRoots,
+        respect_gitignore: bool,
+        entry_limit: usize,
+    ) -> Result<Self, String> {
+        // 解決候補は前方Wikiリンクと同じく隠し文書も含める。表示設定は参照元を
+        // 一覧へ出すかだけに適用し、隠し文書の存在で解決先が変わる規則を維持する。
+        let (mut candidate_paths, paths_truncated) = collect_source_markdown_paths_with_status(
+            backend,
+            true,
+            respect_gitignore && backend.capabilities().respect_gitignore,
+            roots,
+            entry_limit,
+        )?;
+        candidate_paths.sort_by_key(|path| path.to_lowercase());
+
+        let files = super::wiki::WikiFileIndex::new(&candidate_paths);
+        let exact_paths = candidate_paths.iter().cloned().collect::<HashSet<_>>();
+        let native_paths_lower = candidate_paths
+            .iter()
+            .map(|path| (path.to_lowercase(), path.clone()))
+            .collect::<HashMap<_, _>>();
+
+        Ok(Self {
+            paths: candidate_paths,
+            wiki: files,
+            exact_paths,
+            native_paths_lower,
+            truncated: paths_truncated,
+        })
+    }
+}
+
 fn build_link_index(
     backend: &SourceBackend,
     show_hidden_files: bool,
@@ -2450,33 +2434,20 @@ fn build_link_index(
     include_wiki_links: bool,
     roots: &AllowedRoots,
 ) -> Result<CachedLinkIndex, String> {
-    // 解決候補は前方Wikiリンクと同じく隠し文書も含める。表示設定は参照元を
-    // 一覧へ出すかだけに適用し、隠し文書の存在で解決先が変わる規則を維持する。
-    let (mut candidate_paths, paths_truncated) = collect_source_markdown_paths_with_status(
-        backend,
-        true,
-        respect_gitignore && backend.capabilities().respect_gitignore,
-        roots,
-        MAX_ARCHIVE_ENTRIES,
-    )?;
-    candidate_paths.sort_by_key(|path| path.to_lowercase());
-    let mut paths = if show_hidden_files {
-        candidate_paths.clone()
+    let candidates =
+        LinkCandidates::collect(backend, roots, respect_gitignore, MAX_ARCHIVE_ENTRIES)?;
+    let paths = if show_hidden_files {
+        candidates.paths
     } else {
-        collect_source_markdown_paths(
+        let mut visible = collect_source_markdown_paths(
             backend,
             false,
             respect_gitignore && backend.capabilities().respect_gitignore,
             roots,
-        )?
+        )?;
+        visible.sort_by_key(|path| path.to_lowercase());
+        visible
     };
-    paths.sort_by_key(|path| path.to_lowercase());
-    let files = super::wiki::WikiFileIndex::new(&candidate_paths);
-    let exact_paths = candidate_paths.iter().cloned().collect::<HashSet<_>>();
-    let native_paths_lower = candidate_paths
-        .iter()
-        .map(|path| (path.to_lowercase(), path.clone()))
-        .collect::<HashMap<_, _>>();
     let mut edges = Vec::new();
     let mut outgoing_by_source = HashMap::<String, Vec<usize>>::new();
     let mut incoming_by_target = HashMap::<String, Vec<usize>>::new();
@@ -2486,7 +2457,7 @@ fn build_link_index(
     let mut total_references = 0usize;
     let mut total_string_bytes = 0usize;
     let mut inspections = 0usize;
-    let mut truncated = paths_truncated;
+    let mut truncated = candidates.truncated;
     let mut zip_archive = match backend {
         SourceBackend::Zip(source) => Some(
             source
@@ -2535,7 +2506,7 @@ fn build_link_index(
         let mut stop_after_document = false;
         for link in links {
             let target_path = match link.kind {
-                DocumentLinkKind::Wiki => match files.resolve_target(
+                DocumentLinkKind::Wiki => match candidates.wiki.resolve_target(
                     &link.raw_target,
                     &current_dir,
                     &mut inspections,
@@ -2552,8 +2523,8 @@ fn build_link_index(
                     &path,
                     &link.raw_target,
                     backend,
-                    &exact_paths,
-                    &native_paths_lower,
+                    &candidates.exact_paths,
+                    &candidates.native_paths_lower,
                     roots,
                 ) {
                     MarkdownLinkResolution::Resolved(resolved) => Some(resolved),
@@ -2838,11 +2809,13 @@ fn estimated_json_string_bytes(bytes: usize, overhead: usize) -> usize {
 
 #[derive(Clone, Copy)]
 struct ReferenceValidationLimits {
+    max_candidate_entries: usize,
     max_documents: usize,
     max_total_bytes: usize,
 }
 
 const REFERENCE_VALIDATION_LIMITS: ReferenceValidationLimits = ReferenceValidationLimits {
+    max_candidate_entries: MAX_ARCHIVE_ENTRIES,
     max_documents: MAX_REFERENCE_VALIDATION_DOCUMENTS,
     max_total_bytes: MAX_REFERENCE_VALIDATION_TOTAL_BYTES,
 };
@@ -2877,20 +2850,11 @@ fn build_reference_validation_with_limits(
         return Err("Markdown文書を指定してください".to_string());
     }
     let backend = registry.get(&document.source_id)?;
-    let (mut candidate_paths, paths_truncated) = collect_source_markdown_paths_with_status(
-        &backend,
-        true,
-        respect_gitignore && backend.capabilities().respect_gitignore,
-        roots,
-        MAX_ARCHIVE_ENTRIES,
-    )?;
-    candidate_paths.sort_by_key(|path| path.to_lowercase());
-    let files = super::wiki::WikiFileIndex::new(&candidate_paths);
-    let exact_paths = candidate_paths.iter().cloned().collect::<HashSet<_>>();
-    let native_paths_lower = candidate_paths
-        .iter()
-        .map(|path| (path.to_lowercase(), path.clone()))
-        .collect::<HashMap<_, _>>();
+    if let SourceBackend::Native(source) = backend.as_ref() {
+        source
+            .scan_directory()?
+            .verify_current(&source.root, roots)?;
+    }
     let mut zip_archive = match backend.as_ref() {
         SourceBackend::Zip(source) => Some(
             source
@@ -2956,8 +2920,8 @@ fn build_reference_validation_with_limits(
     let current_dir = super::wiki::parent_components_lower(&source_path);
     let mut inspections = 0usize;
     let mut heading_counts = HashMap::<AggregatedHeadingReferenceKey, usize>::new();
-    let mut truncated = paths_truncated
-        || images_truncated
+    let mut candidates: Option<LinkCandidates> = None;
+    let mut truncated = images_truncated
         || links_truncated
         || same_markdown_truncated
         || same_wiki_truncated
@@ -2969,8 +2933,21 @@ fn build_reference_validation_with_limits(
         let target_path = if link.raw_target.is_empty() {
             Some(source_path.clone())
         } else {
+            let candidates = match candidates {
+                Some(ref existing) => existing,
+                None => {
+                    let loaded = LinkCandidates::collect(
+                        &backend,
+                        roots,
+                        respect_gitignore,
+                        limits.max_candidate_entries,
+                    )?;
+                    truncated |= loaded.truncated;
+                    candidates.insert(loaded)
+                }
+            };
             match link.kind {
-                DocumentLinkKind::Wiki => match files.resolve_target(
+                DocumentLinkKind::Wiki => match candidates.wiki.resolve_target(
                     &link.raw_target,
                     &current_dir,
                     &mut inspections,
@@ -2986,8 +2963,8 @@ fn build_reference_validation_with_limits(
                     &source_path,
                     &link.raw_target,
                     &backend,
-                    &exact_paths,
-                    &native_paths_lower,
+                    &candidates.exact_paths,
+                    &candidates.native_paths_lower,
                     roots,
                 ) {
                     MarkdownLinkResolution::Resolved(resolved) => Some(resolved),
@@ -3185,191 +3162,6 @@ pub async fn get_source_reference_validation(
     .map_err(|error| format!("参照検証の取得に失敗しました: {error}"))?;
     drop(guard);
     response
-}
-
-#[tauri::command]
-pub async fn list_source_backlinks(
-    document: DocumentRef,
-    show_hidden_files: bool,
-    respect_gitignore: bool,
-    force_refresh: bool,
-    roots: State<'_, AllowedRoots>,
-    registry: State<'_, SourceRegistry>,
-    indexes: State<'_, LinkIndexState>,
-) -> Result<BacklinkResponse, String> {
-    let roots = roots.inner().clone();
-    let registry = registry.inner().clone();
-    let indexes = indexes.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let (path, index) = get_or_build_link_index(
-            &document,
-            LinkIndexLoadOptions {
-                show_hidden_files,
-                respect_gitignore,
-                include_wiki_links: true,
-                force_refresh,
-            },
-            &roots,
-            &registry,
-            &indexes,
-        )?;
-        let wiki_edges = index
-            .incoming_by_target
-            .get(&path)
-            .into_iter()
-            .flatten()
-            .filter(|edge_id| index.edges[**edge_id].kind == DocumentLinkKind::Wiki)
-            .copied()
-            .collect::<Vec<_>>();
-        let results = wiki_edges
-            .iter()
-            .take(MAX_LINK_CONTEXT_ITEMS)
-            .map(|edge_id| {
-                let edge = &index.edges[*edge_id];
-                BacklinkResult {
-                    document: DocumentRef {
-                        source_id: document.source_id.clone(),
-                        path: edge.source_path.clone(),
-                    },
-                    file_path: edge.source_path.clone(),
-                    reference_count: edge.reference_count,
-                }
-            })
-            .collect();
-        Ok(BacklinkResponse {
-            results,
-            truncated: index.truncated || wiki_edges.len() > MAX_LINK_CONTEXT_ITEMS,
-        })
-    })
-    .await
-    .map_err(|error| format!("バックリンクの取得に失敗しました: {error}"))?
-}
-
-#[tauri::command]
-pub async fn search_source(
-    request_id: u64,
-    source_id: String,
-    options: SourceSearchOptions,
-    roots: State<'_, AllowedRoots>,
-    registry: State<'_, SourceRegistry>,
-    searches: State<'_, SearchState>,
-) -> Result<SourceSearchResponse, String> {
-    let roots = roots.inner().clone();
-    let registry = registry.inner().clone();
-    let searches = searches.inner().clone();
-    searches.begin(request_id);
-
-    tauri::async_runtime::spawn_blocking(move || {
-        let backend = registry.get(&source_id)?;
-        if options.query.is_empty() || !searches.is_current(request_id) {
-            return Ok(SourceSearchResponse {
-                results: Vec::new(),
-                truncated: false,
-                cancelled: !searches.is_current(request_id),
-            });
-        }
-        let pattern = if options.is_regex {
-            options.query
-        } else {
-            regex::escape(&options.query)
-        };
-        let regex = RegexBuilder::new(&pattern)
-            .case_insensitive(!options.case_sensitive)
-            .build()
-            .map_err(|error| error.to_string())?;
-        let paths = collect_source_markdown_paths(
-            &backend,
-            options.show_hidden_files,
-            options.respect_gitignore && backend.capabilities().respect_gitignore,
-            &roots,
-        )?;
-        let mut results = Vec::new();
-        let mut total_matches = 0usize;
-        let mut total_bytes = 0usize;
-        let mut total_compressed_bytes = 0u64;
-        let mut truncated = false;
-        // ZIPは検索全体で同じファイルハンドルと中央ディレクトリを再利用する。
-        // エントリごとの再オープンは最大10,000回の中央ディレクトリ再解析になるため避ける。
-        let mut zip_archive = match backend.as_ref() {
-            SourceBackend::Zip(source) => Some(
-                source
-                    .archive
-                    .lock()
-                    .map_err(|_| "ZIPアーカイブのロックに失敗しました".to_string())?,
-            ),
-            SourceBackend::Native(_) => None,
-        };
-        for path in paths {
-            if !searches.is_current(request_id) {
-                return Ok(SourceSearchResponse {
-                    results,
-                    truncated,
-                    cancelled: true,
-                });
-            }
-            if results.len() >= MAX_SEARCH_RESULTS {
-                truncated = true;
-                break;
-            }
-            if let SourceBackend::Zip(source) = backend.as_ref() {
-                let compressed_size = source
-                    .entries
-                    .get(&path)
-                    .map(|entry| entry.compressed_size)
-                    .unwrap_or_default();
-                total_compressed_bytes = total_compressed_bytes.saturating_add(compressed_size);
-                if total_compressed_bytes > MAX_SEARCH_TOTAL_COMPRESSED_BYTES {
-                    truncated = true;
-                    break;
-                }
-            }
-            let raw = match read_source_text(&backend, &path, &roots, zip_archive.as_deref_mut()) {
-                Ok(raw) => raw,
-                Err(_) if matches!(backend.as_ref(), SourceBackend::Native(_)) => continue,
-                Err(error) => return Err(error),
-            };
-            total_bytes = total_bytes.saturating_add(raw.len());
-            if total_bytes > MAX_SEARCH_TOTAL_BYTES {
-                truncated = true;
-                break;
-            }
-            let mut matches = Vec::new();
-            for (line_index, line) in raw.lines().enumerate() {
-                if regex.is_match(line) {
-                    matches.push(SearchMatch {
-                        line_number: line_index + 1,
-                        line_text: truncate_search_preview(line),
-                    });
-                    total_matches += 1;
-                    if matches.len() >= MAX_MATCHES_PER_FILE || total_matches >= MAX_TOTAL_MATCHES {
-                        truncated = true;
-                        break;
-                    }
-                }
-            }
-            if !matches.is_empty() {
-                results.push(SourceSearchResult {
-                    document: DocumentRef {
-                        source_id: source_id.clone(),
-                        path: path.clone(),
-                    },
-                    file_path: path,
-                    matches,
-                });
-            }
-            if total_matches >= MAX_TOTAL_MATCHES {
-                break;
-            }
-        }
-        results.sort_by(|left, right| left.file_path.cmp(&right.file_path));
-        Ok(SourceSearchResponse {
-            results,
-            truncated,
-            cancelled: false,
-        })
-    })
-    .await
-    .map_err(|error| format!("検索処理に失敗しました: {error}"))?
 }
 
 #[tauri::command(async)]
@@ -4118,6 +3910,7 @@ mod tests {
             ReferenceValidationLimits {
                 max_documents: 2,
                 max_total_bytes: usize::MAX,
+                ..REFERENCE_VALIDATION_LIMITS
             },
         )
         .unwrap();
@@ -4137,6 +3930,7 @@ mod tests {
             ReferenceValidationLimits {
                 max_documents: 3,
                 max_total_bytes: 51,
+                ..REFERENCE_VALIDATION_LIMITS
             },
         )
         .unwrap();
@@ -4145,6 +3939,48 @@ mod tests {
             .heading_documents
             .iter()
             .any(|entry| !entry.complete));
+    }
+
+    #[test]
+    fn reference_validation_scans_only_for_cross_document_headings() {
+        let folder = tempfile::tempdir().unwrap();
+        let current = folder.path().join("current.md");
+        let roots = AllowedRoots::new();
+        roots.register(&folder.path().to_string_lossy()).unwrap();
+        let registry = SourceRegistry::new();
+        let root = roots.resolve(&folder.path().to_string_lossy()).unwrap();
+        let source = registry.register_native(root, &roots).unwrap();
+        let document = DocumentRef {
+            source_id: source.id,
+            path: "current.md".into(),
+        };
+        let validate = || {
+            build_reference_validation_with_limits(
+                &document,
+                true,
+                false,
+                &roots,
+                &registry,
+                ReferenceValidationLimits {
+                    max_candidate_entries: 1,
+                    ..REFERENCE_VALIDATION_LIMITS
+                },
+            )
+            .unwrap()
+        };
+
+        std::fs::write(
+            &current,
+            "# Here\n[here](#here) ![image](missing.png) [plain](other.md)",
+        )
+        .unwrap();
+        let local = validate();
+        assert!(!local.truncated);
+        assert_eq!(local.heading_references.len(), 1);
+        assert_eq!(local.image_problems.len(), 1);
+
+        std::fs::write(current, "[other](other.md#heading)").unwrap();
+        assert!(validate().truncated);
     }
 
     #[test]

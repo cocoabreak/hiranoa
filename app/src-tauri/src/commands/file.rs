@@ -23,12 +23,12 @@ use persistent_trust::ExplorerRoot;
 pub use persistent_trust::PersistentExplorerRoot;
 pub(crate) use readers::{
     build_markdown_content, image_mime_type, normalize_path_for_display,
-    normalize_path_for_frontend, read_dir_single_level, read_file_inner, MarkdownFileContent,
-    MAX_IMAGE_BYTES, MAX_MARKDOWN_BYTES,
+    normalize_path_for_frontend, read_dir_single_level, MarkdownFileContent, MAX_IMAGE_BYTES,
+    MAX_MARKDOWN_BYTES,
 };
 #[cfg(test)]
 use readers::{
-    observed_markdown_size, read_custom_css_inner, read_file_with_size_inner,
+    observed_markdown_size, read_custom_css_inner, read_file_inner, read_file_with_size_inner,
     read_image_data_url_inner, requires_large_markdown_confirmation, LARGE_MARKDOWN_WARNING_BYTES,
 };
 #[cfg(test)]

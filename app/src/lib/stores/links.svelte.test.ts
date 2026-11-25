@@ -85,6 +85,9 @@ describe("LinkInspectorStore", () => {
     vi.mocked(openSourceMarkdown).mockResolvedValue(true);
     await expect(store.openDocument(resolved.target, source)).resolves.toBe(true);
     await expect(store.openDocument(null, source)).resolves.toBe(false);
+    await expect(
+      store.openDocument({ ...resolved.target, sourceId: "other" }, source)
+    ).resolves.toBe(false);
     expect(openSourceMarkdown).toHaveBeenCalledOnce();
   });
 

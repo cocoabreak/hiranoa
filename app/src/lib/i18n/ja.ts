@@ -237,7 +237,6 @@ export const ja = {
   sidebar: {
     explorer: "エクスプローラー",
     search: "検索",
-    backlinks: "バックリンク",
     links: "リンク",
     recentFolders: "最近開いたフォルダー",
     recentArchives: "最近開いたアーカイブ",
@@ -299,18 +298,7 @@ export const ja = {
     useRegex: "正規表現を使用する",
     searching: "検索中...",
     noResults: "見つかりませんでした",
-    resultsLimited: "結果が多いため、先頭5,000件まで表示しています",
-  },
-  backlinks: {
-    title: "バックリンク",
-    refresh: "バックリンクを再読み込み",
-    openDocument: "Markdown文書を開いてください",
-    pluginDisabled: "設定でWikiリンクを有効にしてください",
-    unavailable: "このソースではバックリンクを利用できません",
-    loading: "バックリンクを索引化しています...",
-    failed: (error: unknown) => `バックリンクを取得できませんでした: ${String(error)}`,
-    resultsLimited: "処理上限に達したため、一部のバックリンクだけを表示しています",
-    noResults: "この文書を参照するWikiリンクはありません",
+    resultsLimited: "検索が処理上限に達しました。結果は一部のみです",
   },
   links: {
     title: "リンク",

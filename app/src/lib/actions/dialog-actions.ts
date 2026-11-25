@@ -1,6 +1,6 @@
 import { captureOpenTarget } from "./workspace-actions";
 import { workspaceStore } from "$lib/stores/workspace.svelte";
-import { hasPendingSource, reconcileDocumentResource } from "$lib/document-resources";
+import { withRegisteredArchive, releaseArchive, ensureWatch } from "$lib/document-resources";
 import { invoke } from "@tauri-apps/api/core";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { settingsStore } from "$lib/stores/settings.svelte";
@@ -12,27 +12,7 @@ import { authorizeArchivePath, authorizeFolderPath } from "$lib/actions/security
 import { sessionRestorePromptStore } from "$lib/stores/session-restore-prompt.svelte";
 import { tabStore } from "$lib/stores/tab.svelte";
 import { i18n } from "$lib/i18n/index.svelte";
-import {
-  listSourceEntries,
-  registerNativeSource,
-  registerZipSource,
-  rootDocument,
-} from "$lib/document-sources";
-import type { DocumentSourceInfo } from "$lib/types";
-
-async function releaseArchiveSource(source: DocumentSourceInfo | null): Promise<void> {
-  if (source?.kind !== "zip" || tabStore.allTabs.some((tab) => tab.source?.id === source.id))
-    return;
-  await reconcileDocumentResource(
-    source.nativePath,
-    () =>
-      hasPendingSource(source.id) ||
-      explorerStore.source?.id === source.id ||
-      tabStore.allTabs.some((tab) => tab.source?.id === source.id),
-    source.id
-  );
-}
-
+import { listSourceEntries, registerNativeSource, rootDocument } from "$lib/document-sources";
 /** ファイル選択ダイアログを開き、選択されたMarkdownファイルをタブで開く */
 export async function openFileDialog(): Promise<void> {
   const target = captureOpenTarget();
@@ -53,7 +33,6 @@ export async function openFileDialog(): Promise<void> {
 export async function openFolder(path: string): Promise<boolean> {
   const version = workspaceStore.layoutVersion;
   if (!(await authorizeFolderPath(path))) return false;
-  const previousSource = explorerStore.source;
   // ルート直下1階層のみ読み込む。サブフォルダは展開時に遅延取得する
   const source = await registerNativeSource(path);
   const tree = await listSourceEntries(
@@ -61,8 +40,9 @@ export async function openFolder(path: string): Promise<boolean> {
     settingsStore.settings.respectGitignore
   );
   if (version !== workspaceStore.layoutVersion) return false;
+  const previousSource = explorerStore.source;
   explorerStore.setRoot(path, tree, source);
-  await releaseArchiveSource(previousSource);
+  await releaseArchive(previousSource, () => tabStore.allTabs);
   // 表示中レベル（この時点ではルートのみ）のファイル増減監視を張り直す
   await syncDirWatches();
   if (!settingsStore.settings.sidebarVisible) {
@@ -77,19 +57,26 @@ export async function openFolder(path: string): Promise<boolean> {
 export async function openArchive(path: string): Promise<boolean> {
   const version = workspaceStore.layoutVersion;
   if (!(await authorizeArchivePath(path))) return false;
-  const previousSource = explorerStore.source;
-  const source = await registerZipSource(path);
-  const tree = await listSourceEntries(rootDocument(source), false);
-  if (version !== workspaceStore.layoutVersion) {
-    await releaseArchiveSource(source);
-    return false;
-  }
-  for (const tab of tabStore.allTabs.filter((tab) => tab.source?.id === source.id)) {
-    tabStore.updateTab(tab.id, { source });
-  }
-  explorerStore.setRoot(path, tree, source);
-  if (previousSource?.id !== source.id) await releaseArchiveSource(previousSource);
-  await invoke("watch_path", { path: source.nativePath }).catch(() => {});
+  const opened = await withRegisteredArchive(
+    path,
+    () => tabStore.allTabs,
+    async (source) => {
+      const tree = await listSourceEntries(rootDocument(source), false);
+      if (version !== workspaceStore.layoutVersion) return false;
+      for (const tab of tabStore.allTabs) {
+        if (tab.source?.id === source.id) tabStore.updateTab(tab.id, { source });
+      }
+      const previousSource = explorerStore.source;
+      explorerStore.setRoot(path, tree, source);
+      if (previousSource?.id !== source.id)
+        await releaseArchive(previousSource, () => tabStore.allTabs);
+      await ensureWatch({ path: source.nativePath, archive: source }, () => tabStore.allTabs).catch(
+        () => {}
+      );
+      return true;
+    }
+  );
+  if (!opened) return false;
   await syncDirWatches();
   if (!settingsStore.settings.sidebarVisible) settingsStore.toggleSidebar();
   sessionRestorePromptStore.hide();
