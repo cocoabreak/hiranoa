@@ -10,6 +10,7 @@ import {
   terminateProcessTree,
 } from "../scripts/webview2-driver.mjs";
 import { createFixtures } from "./fixtures.mjs";
+import { verifyAnnotationMigration } from "./annotation-migration.mjs";
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactsDir = path.join(appDir, "e2e", "artifacts");
@@ -56,6 +57,9 @@ try {
   await driver.waitForCdp();
   diagnostics = await driver.observeDiagnostics();
   await driver.waitFor("window.__e2e?.getState().hydrated", { timeoutMs: 30_000 });
+
+  await test("旧形式の注釈を保持し、最後の削除と候補検索の失敗を個別に表示する", () =>
+    verifyAnnotationMigration(driver, workDir));
 
   await test("Markdownを開いて表示できる", async () => {
     await open("openMarkdownFile", fixtures.basic);
@@ -732,6 +736,188 @@ try {
       markdownError: "ソースのルート外へ移動できません",
       imageError: "ソースのルート外へ移動できません",
     });
+  });
+
+  await test("注釈の保存、コピーの分離、改訂時の位置の復元と未解決表示", async () => {
+    const original = path.join(workDir, "guide.md");
+    const copy = path.join(workDir, "copy.md");
+    const raw =
+      "# 設定の適用\n\n設定は翌日から反映されます。\n\n変更内容は履歴から確認できます。\n";
+    writeFileSync(original, raw);
+    writeFileSync(copy, raw);
+    const button = (selector) => `document.querySelector('.annotations ${selector}')`;
+    const highlight = "CSS.highlights.get('hiranoa-note-yellow')?.size";
+    const client = await driver.connect();
+    const viewport = (width) =>
+      client.send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height: 760,
+        deviceScaleFactor: 1,
+        mobile: false,
+      });
+    try {
+      const selectParagraph = (index = 0) =>
+        driver.evaluate(`(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelectorAll('.markdown-body p')[${index}]);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    })()`);
+      const toolbar = "[data-annotation-toolbar]";
+      await driver.evaluate("window.__e2e.resetSession()");
+      await viewport(1250);
+      await driver.evaluate(`(async()=>{const {settingsStore}=await import('/src/lib/stores/settings.svelte.ts');
+      settingsStore.setTheme('dark'); settingsStore.setContentZoom(100); if(!settingsStore.settings.tocVisible)settingsStore.toggleToc();})()`);
+      await open("openMarkdownFile", original);
+      await driver.waitFor(
+        "document.documentElement.classList.contains('dark') && document.querySelector('[data-notes-tab]') && document.querySelector('.markdown-body p')?.textContent==='設定は翌日から反映されます。'"
+      );
+      const location = () =>
+        driver.evaluate(
+          "document.querySelector('.markdown-body p').getBoundingClientRect().toJSON()"
+        );
+      const before = await location();
+      await selectParagraph(1);
+      await driver.waitFor(
+        "document.querySelectorAll('[data-annotation-toolbar] [data-pick]').length === 3"
+      );
+      await driver.evaluate("document.querySelector('[data-annotation-toolbar] button').focus()");
+      await driver.key("Escape");
+      await driver.waitFor("!document.querySelector('[data-annotation-toolbar]')");
+      await selectParagraph(1);
+      await driver.waitFor("document.querySelector('[data-annotation-toolbar] [data-pick=blue]')");
+      await driver.click(toolbar + " [data-pick=blue]");
+      await driver.waitFor(
+        "CSS.highlights.get('hiranoa-note-blue')?.size === 1 && !document.querySelector('[data-annotation-toolbar]')"
+      );
+      assert.deepEqual(await location(), before);
+      assert.equal(await driver.evaluate("document.querySelector('.annotations') === null"), true);
+      await selectParagraph();
+      await driver.waitFor("document.querySelector('[data-add-memo]') !== null");
+      await driver.click(toolbar + " [data-add-memo]");
+      await driver.waitFor("document.activeElement.matches('[data-annotation-toolbar] textarea')");
+      await driver.evaluate(`(() => {
+      const input = document.querySelector('[data-annotation-toolbar] textarea');
+      input.value='運用チームに確認する';
+      input.dispatchEvent(new Event('input',{bubbles:true}));
+      document.querySelector('[data-annotation-toolbar] [data-save]').click();
+    })()`);
+      await driver.waitFor(
+        `${highlight} === 1 && !document.querySelector('[data-annotation-toolbar]')`
+      );
+      await driver.click("[data-notes-tab]");
+      await driver.waitFor(`${button("article p")}?.textContent === '運用チームに確認する'`);
+      await driver.click(".annotations article[data-color=yellow] [data-edit]");
+      await driver.waitFor(`${button("[data-pick=yellow][aria-pressed=true]")}`);
+      await driver.screenshot(path.join(artifactsDir, "annotation-colors-dark.png"));
+      await driver.click(".annotations [data-save]");
+      await open("openMarkdownFile", copy);
+      await driver.waitFor(button("[data-match]"));
+      assert.equal(await driver.evaluate(highlight + " ?? 0"), 0);
+      assert.equal(await driver.evaluate(button("article") + " === null"), true);
+      writeFileSync(
+        original,
+        raw.replace(
+          "設定は翌日から反映されます。",
+          "適用する前に内容を確認してください。\n\n設定は翌日から反映されます。"
+        )
+      );
+      await open("openMarkdownFile", original);
+      await driver.waitFor(
+        `document.querySelector('.markdown-body p')?.textContent === '適用する前に内容を確認してください。' && ${highlight} === 1`
+      );
+      writeFileSync(copy, readFileSync(original));
+      await open("openMarkdownFile", copy);
+      await driver.waitFor(button("[data-match]"));
+      assert.equal(await driver.evaluate(highlight + " ?? 0"), 0);
+      writeFileSync(original, raw.replace("翌日", "当日"));
+      await open("openMarkdownFile", original);
+      await driver.waitFor(
+        `document.querySelector('.markdown-body p')?.textContent === '設定は当日から反映されます。' && !(${highlight})`
+      );
+      await driver.waitFor(
+        `${button("article strong")} && ${button("article[data-color=yellow] q")}?.textContent === '設定は翌日から反映されます。' && ${button("article p")}?.textContent === '運用チームに確認する'`
+      );
+      await driver.evaluate(`(() => {
+      const range = document.createRange();
+      range.selectNodeContents(document.querySelector('.markdown-body p'));
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    })()`);
+      await driver.waitFor(button("button[data-reattach]"));
+      await driver.click(".annotations article[data-color=yellow] button[data-reattach]");
+      await driver.waitFor(
+        `${highlight} === 1 && ${button("article[data-color=yellow] q")}?.textContent === '設定は当日から反映されます。' && ${button("article p")}?.textContent === '運用チームに確認する'`
+      );
+      // The narrow drawer is reachable even from a document without headings.
+      await viewport(770);
+      const plain = path.join(workDir, "reading.md");
+      writeFileSync(plain, "本文だけの文書です。\n");
+      await open("openMarkdownFile", plain);
+      await driver.waitFor(
+        "document.querySelector('[data-open-annotations]') && document.querySelector('.markdown-body p')?.textContent === '本文だけの文書です。'"
+      );
+      await driver.click("[data-open-annotations]");
+      await driver.waitFor(
+        "document.querySelector('#toc-drawer .annotations') && !document.querySelector('.annotations article')"
+      );
+      await driver.evaluate(`(() => {
+        const input=document.querySelector('#toc-drawer input[type=file]');
+        const transfer=new DataTransfer();
+        transfer.items.add(new File(["{}"],"annotations.json",{type:"application/json"}));
+        input.files=transfer.files;input.dispatchEvent(new Event("change",{bubbles:true}));
+      })()`);
+      await driver.waitFor("document.querySelector('#toc-drawer [role=alert]')");
+      await driver.click("#toc-drawer [data-close-panel]");
+      await driver.waitFor("!document.querySelector('#toc-drawer')");
+      // In split view the list follows the pane that owns the keyboard focus.
+      await viewport(1600);
+      await driver.key("Ctrl+\\");
+      await driver.waitFor("document.querySelectorAll('.viewer-pane').length===2");
+      await open("openMarkdownFile", original);
+      await driver.waitFor("!!document.querySelector('.annotations article')");
+      await driver.evaluate(`(() => {
+        const range=document.createRange();
+        range.selectNodeContents(document.querySelector('.pane-active .markdown-body p'));
+        getSelection().removeAllRanges();getSelection().addRange(range);
+      })()`);
+      await driver.waitFor("document.querySelector('[data-add-memo]')");
+      await driver.click(toolbar + " [data-add-memo]");
+      await driver.waitFor("document.activeElement.matches('[data-annotation-toolbar] textarea')");
+      await driver.evaluate(`(() => {
+        const input=document.activeElement;
+        input.value="編集中のメモ";input.dispatchEvent(new Event('input',{bubbles:true}));
+      })()`);
+      await driver.click(toolbar + " [data-pick=pink]");
+      const clickParagraph = async (text) => {
+        const point = await driver.evaluate(`(() => {
+          const p=Array.from(document.querySelectorAll('.viewer-pane .markdown-body p')).find(el=>el.textContent===${JSON.stringify(text)});
+          const rect=p.getBoundingClientRect();return {x:rect.left+8,y:rect.top+8};
+        })()`);
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mousePressed",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+        await client.send("Input.dispatchMouseEvent", {
+          type: "mouseReleased",
+          button: "left",
+          clickCount: 1,
+          ...point,
+        });
+      };
+      await clickParagraph("本文だけの文書です。");
+      await driver.waitFor(
+        "document.querySelector('.annotations') && !document.querySelector('.annotations article')"
+      );
+      await clickParagraph("設定は当日から反映されます。");
+      await driver.waitFor(
+        "document.querySelector('[data-annotation-toolbar] textarea')?.value==='編集中のメモ' && document.querySelector('[data-pick=pink][aria-pressed=true]')"
+      );
+    } finally {
+      client.close();
+    }
   });
 
   const unexpectedErrors = diagnostics.errors.filter(

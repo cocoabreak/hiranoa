@@ -9,6 +9,7 @@ fn text_export_spec(format: &str) -> Result<(&'static str, &'static str), String
     match format {
         "html" => Ok(("HTML Document", "html")),
         "svg" => Ok(("SVG Image", "svg")),
+        "annotations" => Ok(("Hiranoa Annotations", "json")),
         _ => Err("未対応のテキスト出力形式です".to_string()),
     }
 }
@@ -86,7 +87,14 @@ fn pick_export_path(
         .dialog()
         .file()
         .add_filter(filter_name, &[extension])
-        .set_file_name(suggested_file_name(suggested_name, extension))
+        .set_file_name(if extension == "json" {
+            suggested_file_name(
+                suggested_name.trim_end_matches(".hiranoa.json"),
+                "hiranoa.json",
+            )
+        } else {
+            suggested_file_name(suggested_name, extension)
+        })
         .blocking_save_file();
     let Some(selected) = selected else {
         return Ok(None);
@@ -106,13 +114,38 @@ pub async fn save_text_export(
     contents: String,
 ) -> Result<bool, String> {
     let (filter_name, extension) = text_export_spec(&format)?;
+    if format == "annotations" && contents.len() > 8 * 1024 * 1024 {
+        return Err("注釈の出力データが上限（8 MiB）を超えています".to_string());
+    }
     validate_export_size(contents.len())?;
     let _dialog_guard = dialogs.try_acquire()?;
     let Some(path) = pick_export_path(&app, filter_name, extension, &suggested_name)? else {
         return Ok(false);
     };
-    std::fs::write(path, contents.as_bytes()).map_err(|error| error.to_string())?;
+    if format == "annotations"
+        && !path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".hiranoa.json"))
+    {
+        return Err("注釈の保存先には .hiranoa.json を指定してください".to_string());
+    }
+    if format == "annotations" {
+        write_annotations(&path, contents.as_bytes()).map_err(|error| error.to_string())?;
+    } else {
+        std::fs::write(path, contents.as_bytes()).map_err(|error| error.to_string())?;
+    }
     Ok(true)
+}
+
+fn write_annotations(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+    let mut file = tempfile::NamedTempFile::new_in(parent)?;
+    file.write_all(contents)?;
+    file.as_file().sync_all()?;
+    file.persist(path)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -141,6 +174,7 @@ mod tests {
     fn export_formats_are_separated_by_content_type() {
         assert!(text_export_spec("html").is_ok());
         assert!(text_export_spec("svg").is_ok());
+        assert!(text_export_spec("annotations").is_ok());
         assert!(text_export_spec("png").is_err());
         assert!(binary_export_spec("png").is_ok());
         assert!(binary_export_spec("html").is_err());
@@ -160,6 +194,15 @@ mod tests {
     fn export_size_limit_accepts_boundary_and_rejects_one_byte_over() {
         assert!(validate_export_size(MAX_EXPORT_BYTES).is_ok());
         assert!(validate_export_size(MAX_EXPORT_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn annotation_export_replaces_the_saved_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("guide.md.hiranoa.json");
+        write_annotations(&path, b"first").unwrap();
+        write_annotations(&path, b"second").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"second");
     }
 
     #[test]

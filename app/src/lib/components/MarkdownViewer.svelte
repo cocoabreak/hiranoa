@@ -87,7 +87,7 @@
   const renderSession = createMarkdownRenderSession();
   const renderMarkdown = renderSession.render;
   const cancelMarkdownRender = renderSession.cancel;
-  let contentEl: HTMLElement;
+  let contentEl: HTMLElement = $state()!;
   $effect(() => {
     const root = contentEl;
     workspaceStore.setRoot(paneId, root);
@@ -911,6 +911,21 @@
       </div>
     {/if}
   </div>
+  {#if activeTab?.document && activeTab.source && activeContent && contentEl}
+    {#key activeTab.path}
+      {#await import("./AnnotationPanel.svelte") then panel}
+        <panel.default
+          {paneId}
+          root={contentEl}
+          documentRef={activeTab.document}
+          source={activeTab.source}
+          title={activeTab.title}
+          raw={activeContent.raw}
+          rendered={!isLoading && !isSafeMode && !isSourceMode && !renderError && !!renderedHtml}
+        />
+      {/await}
+    {/key}
+  {/if}
   {#if referenceCopyFeedbackStore.feedback}
     <div
       class="pointer-events-none absolute bottom-3 left-1/2 z-20 -translate-x-1/2 rounded border bg-background px-3 py-2 text-sm shadow"

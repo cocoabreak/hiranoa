@@ -2,6 +2,17 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.8] - 2026-11-25
+
+### Added
+
+- Select text in a Markdown document to highlight it in one of three colors or add a reading note. The annotations panel keeps the original quote and note available after edits, so readers can reattach a highlight when its position is unclear.
+- Export and import a document's annotations as JSON, or copy or move them to another document. Annotations are stored locally in Hiranoa, including for documents opened from ZIP archives.
+
+### Changed
+
+- Updated the CI, weekly security scan, and release workflows to use GitHub Actions that run on Node.js 24.
+
 ## [0.3.7] - 2026-11-25
 
 ### Fixed
