@@ -2,6 +2,13 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.6] - 2026-11-25
+
+### Security
+
+- Updated the Rust URL parser to 2.5.9 to fix a stack overflow in URL origin handling (RUSTSEC-2026-0592).
+- Updated the Rust cookie dependency to 0.18.3 to address private-cookie nonce reuse after a process fork (RUSTSEC-2026-0594).
+
 ## [0.3.5] - 2026-11-20
 
 ### Added
