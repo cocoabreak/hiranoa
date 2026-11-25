@@ -2,6 +2,17 @@
 
 All notable changes to Hiranoa (formerly FeatherMD) are documented in this file.
 
+## [0.3.7] - 2026-11-25
+
+### Fixed
+
+- Full-text search now reports incomplete results when it reaches a processing limit, including when no matches were found.
+- File monitoring now keeps shared documents and ZIP archives watched until the last tab or Explorer releases them, including when an archive is reopened under a different path spelling.
+
+### Changed
+
+- Link inspection skips the folder scan for heading validation when the document only refers to its own headings or images.
+
 ## [0.3.6] - 2026-11-25
 
 ### Security
