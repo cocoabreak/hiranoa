@@ -21,16 +21,49 @@ export const annotationLibrary = {
 function database() {
   if (!opening)
     opening = new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("hiranoa-annotations", 1);
-      request.onupgradeneeded = () => {
-        const store = request.result.createObjectStore(storeName, { keyPath: "location" });
-        store.createIndex("catalog", ["revision", "title", "id", "count"]);
+      const request = indexedDB.open("hiranoa-annotations", 2);
+      request.onupgradeneeded = ({ oldVersion }) => {
+        const store =
+          oldVersion === 0
+            ? request.result.createObjectStore(storeName, { keyPath: "location" })
+            : request.transaction!.objectStore(storeName);
+        if (!store.indexNames.contains("catalog"))
+          store.createIndex("catalog", ["revision", "title", "id", "count"]);
+        if (oldVersion === 1) {
+          // Both v1 layouts exist. Rows without a count are absent from the compound index.
+          if (store.indexNames.contains("revision")) store.deleteIndex("revision");
+          const scan = store.openCursor();
+          scan.onsuccess = () => {
+            const cursor = scan.result;
+            if (!cursor) return;
+            const book: Book = cursor.value;
+            const count = book.annotations.length;
+            let changed = book.count !== count;
+            for (const note of book.annotations) {
+              // Early anchors did not record the heading or whether the quote was unique.
+              if (note.heading === undefined || note.unique === undefined) {
+                note.heading ??= "";
+                note.unique ??= false;
+                changed = true;
+              }
+            }
+            if (changed) cursor.update({ ...book, count });
+            cursor.continue();
+          };
+        }
       };
       request.onerror = () => {
         opening = undefined;
         reject(request.error);
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onversionchange = () => {
+          db.close();
+          opening = undefined;
+        };
+        resolve(db);
+      };
     });
   return opening;
 }

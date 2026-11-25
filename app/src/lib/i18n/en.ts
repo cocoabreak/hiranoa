@@ -30,6 +30,7 @@ export const en: typeof ja = {
     deleteConfirm: "Delete this annotation?",
     moveConfirm: "Move all annotations from the original document to this one?",
     noOther: "No documents with annotations are available.",
+    lookupError: "Could not find which documents have annotations to reuse.",
   },
   gitHistory: {
     open: "View Git history and diff",

@@ -54,6 +54,8 @@
   let current = $state.raw<OpenBook>();
   let notes = $state.raw<Annotation[]>([]);
   let candidates = $state.raw<Awaited<ReturnType<typeof otherBooks>>>([]);
+  let lookup = $state<"idle" | "ready" | "failed">("idle");
+  let readFailed = $state(false);
   type SelectionTarget = { anchor: Anchor; range: Range };
   let selected = $state.raw<SelectionTarget | null>(null);
   let draft = $state.raw<SelectionTarget | null>(null);
@@ -78,6 +80,7 @@
     const params = { source, documentRef, title, raw };
     let active = true;
     current = undefined;
+    failed = null;
     draft = null;
     selected = null;
     Promise.all([documentLocation(params.source, params.documentRef), digest(params.raw)])
@@ -99,20 +102,29 @@
       all = showAll;
     void annotationLibrary.version;
     let active = true;
+    candidates = [];
+    lookup = "idle";
+    readFailed = false;
     if (!book) {
       notes = [];
-      candidates = [];
       return;
     }
     (async () => {
       const saved = await readBook(book.location);
-      const others = saved ? [] : await otherBooks(book, all);
-      if (active) {
-        notes = saved?.annotations ?? [];
-        candidates = others;
+      if (!active) return;
+      notes = saved?.annotations ?? [];
+      if (saved) return;
+      try {
+        const others = await otherBooks(book, all);
+        if (active) {
+          candidates = others;
+          lookup = "ready";
+        }
+      } catch {
+        if (active) lookup = "failed";
       }
     })().catch(() => {
-      if (active) failed = "reader";
+      if (active) readFailed = true;
     });
     return () => {
       active = false;
@@ -317,7 +329,7 @@
     ondismiss={dismiss}
   />
 {/if}
-{#if failed === "reader" && activePane}
+{#if (failed === "reader" || readFailed) && activePane && !fileInput}
   <p
     role="alert"
     class="absolute bottom-2 left-2 z-30 rounded border bg-background px-3 py-2 text-sm text-destructive print:hidden"
@@ -331,8 +343,10 @@
     class="annotations min-h-0 flex-1 overflow-y-auto px-3 py-2 text-xs"
     aria-label={m.title}
   >
-    {#if failed}<p role="alert" class="rounded border px-2 py-1 text-destructive">{m.error}</p>{/if}
-    {#if !notes.length}<p>{m.empty} {rendered ? m.select : ""}</p>{/if}
+    {#if failed || readFailed}<p role="alert" class="rounded border px-2 py-1 text-destructive">
+        {m.error}
+      </p>{/if}
+    {#if !notes.length && current && !readFailed}<p>{m.empty} {rendered ? m.select : ""}</p>{/if}
     {#each orderedNotes as n (n.id)}
       <article class="mb-3 border-s-[3px] px-2 py-1" data-color={n.color}>
         {#if ranges.has(n.id)}
@@ -406,7 +420,10 @@
           <button disabled={busy} onclick={() => transfer(candidate, false)}>{m.copy}</button>
         </div>
       {/each}
-    {:else if showAll && !notes.length}<p>{m.noOther}</p>{/if}
+    {:else if lookup === "failed"}<p role="alert" class="rounded border px-2 py-1 text-destructive">
+        {m.lookupError}
+      </p>
+    {:else if showAll && lookup === "ready"}<p>{m.noOther}</p>{/if}
   </section>
 {/snippet}
 

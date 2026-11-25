@@ -33,6 +33,7 @@ export const ja = {
     deleteConfirm: "この注釈を削除しますか？",
     moveConfirm: "元の文書の注釈をすべて、この文書に移しますか？",
     noOther: "引き継げる文書はありません。",
+    lookupError: "注釈を引き継げる文書を検索できませんでした。",
   },
   gitHistory: {
     open: "Git履歴と差分を確認",

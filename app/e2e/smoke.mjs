@@ -10,6 +10,7 @@ import {
   terminateProcessTree,
 } from "../scripts/webview2-driver.mjs";
 import { createFixtures } from "./fixtures.mjs";
+import { verifyAnnotationMigration } from "./annotation-migration.mjs";
 
 const appDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactsDir = path.join(appDir, "e2e", "artifacts");
@@ -56,6 +57,9 @@ try {
   await driver.waitForCdp();
   diagnostics = await driver.observeDiagnostics();
   await driver.waitFor("window.__e2e?.getState().hydrated", { timeoutMs: 30_000 });
+
+  await test("旧形式の注釈を保持し、最後の削除と候補検索の失敗を個別に表示する", () =>
+    verifyAnnotationMigration(driver, workDir));
 
   await test("Markdownを開いて表示できる", async () => {
     await open("openMarkdownFile", fixtures.basic);
