@@ -20,15 +20,17 @@ Hiranoa is a fast, read-only viewer for local Markdown files and Markdown docume
 
 ## Highlights
 
-- **Rich Markdown rendering** — CommonMark-style Markdown, GitHub-style tables and task lists, syntax highlighting with Shiki, KaTeX math, Mermaid diagrams, emoji, and YAML frontmatter.
-- **Native files and ZIP archives** — Open `.md` and `.markdown` files directly, or browse and view Markdown entries inside ZIP archives without extracting them first.
+- **Rich Markdown rendering** — CommonMark-style Markdown, GitHub-style tables and task lists, GitHub Alerts, Obsidian Callouts, syntax highlighting with Shiki, KaTeX math, Mermaid diagrams, emoji, and YAML frontmatter.
+- **Native files and ZIP archives** — Open `.md` and `.markdown` files directly, or browse Markdown entries in a ZIP without extracting it. For documents from 5 MiB through 10 MiB, safe mode lets you read the source as plain text and jump between headings using the outline.
+- **Highlights and reading notes** — Select a passage to highlight it in one of three colors or add a note on the spot. Use **Annotations** in the right panel to jump back to a passage. If a revision leaves its location unclear, the original quote and note stay in the list. You can select a new passage to reattach them.
 - **Explorer and tabs** — Open a folder as the Explorer root, lazily browse Markdown files, open and reorder multiple tabs, pin tabs, reopen a closed tab, and track file changes automatically.
-- **Navigation** — Generated outline, Wiki links (`[[Page]]`), hover previews, a link inspector with a detachable local link graph, local Markdown links, Back/Forward history, heading anchors, and scroll-position preservation per tab.
-- **Search and quick access** — Find text in the current document, search the Explorer root, quickly open files by name, or find commands from the command palette.
+- **Navigation and link inspection** — Navigate with the outline, heading anchors, local links, Wiki links (`[[Page]]`), and Back/Forward history. Preview a link target or explore the link graph in its own window. The link inspector shows incoming and outgoing links, missing images, and missing heading targets. Copy a reference to a document or heading as a Wiki link or Markdown link.
+- **Search and quick access** — Search within the current page, or find documents in an open folder or ZIP by text, frontmatter properties, tags, or source URL. Look up which documents cite a particular source. Full-text search labels results as incomplete when it reaches a processing limit. Quick Open finds files by name, and the command palette finds actions.
 - **Images and diagrams** — Resolve trusted local images safely and inspect images or Mermaid diagrams in a zoomable, pannable lightbox.
 - **Desktop workflows** — Open files or folders from native dialogs, drag and drop, recent history, keyboard shortcuts, the command line, or the optional Windows Explorer context menu.
-- **Session continuity** — Restore tabs, pinned state, the active tab, view modes, scroll positions, in-file searches, Explorer state, and the last Explorer root. The last explicitly approved Explorer root is the only root trusted across restarts.
-- **Customization** — Light, dark, and system themes; content zoom; resizable Explorer and outline areas; renderer toggles; code themes; optional line numbers; and scoped custom CSS.
+- **Split view and workspaces** — Read two documents side by side, each with its own tabs, reading position, and in-page search. Restore pinned tabs, the active tab, view modes, and the Explorer state and root on restart. Save tabs, pane arrangements, and zoom levels as named layouts to switch between tasks.
+- **Git history and diffs** — Compare two revisions of a Markdown document in a local Git repository, or compare a revision with the working copy. Use synchronized scrolling to compare the rendered versions, or switch to a line-by-line source diff to inspect changes in Markdown syntax.
+- **Customization** — Light, dark, and system themes, content zoom, resizable panels, separate local fonts for body text and code, renderer toggles, code themes, optional line numbers, and scoped custom CSS.
 - **Utilities** — Rendered/source view switching, code-copy buttons, reading statistics, external-editor integration, printing/PDF, HTML export, and SVG/PNG export for diagrams.
 - **Localized UI** — Japanese and English UI, including the native application menu.
 
@@ -36,14 +38,16 @@ Hiranoa is a fast, read-only viewer for local Markdown files and Markdown docume
 
 Hiranoa treats Markdown as potentially untrusted input. The guarantees below describe release builds.
 
-- File access is validated by the Rust backend against canonicalized allowed roots.
+- When reading documents or local images and scanning directories, the Rust backend checks the resolved target against the scope approved for that operation. Relative document links and local image references inside a ZIP resolve within that archive.
 - Drive roots, Windows system directories, and the user-profile root cannot be trusted as broad Explorer roots.
 - The WebView cannot silently add trusted folders. New folders require an OS-originated action or a native confirmation dialog.
-- Only the most recently approved Explorer root is persisted as trusted; other recent folders require confirmation again.
+- On restart, Hiranoa restores trust only for the last explicitly approved Explorer root. It verifies that this is the same directory that was approved. Replacing the directory at the same path requires fresh approval.
+- Git history comparison is read-only and stays within the approved document and local repository scope. It uses no remote connections, Git hooks, or external diff tools. Approving history access does not grant broader file access.
 - Rendered HTML is sanitized, Mermaid uses strict security settings, and the app runs with a restrictive Content Security Policy.
 - Local Markdown, images, custom CSS, searches, and directory traversal have type, size, or entry-count limits where applicable.
 - At startup, Hiranoa checks GitHub Releases for a newer version by default. This can be disabled in Settings. The update request does not include document contents or local file paths.
-- External HTTPS images follow the selected privacy policy. Under the default policy, they are not requested until the user approves them for the current document.
+- By default, external HTTPS images load only after you approve them for the current document. This policy also covers images in Mermaid diagrams. Exported HTML reflects the image permissions in effect at export time. Links in enlarged Mermaid diagrams are disabled.
+- Hiranoa stores annotations locally in its own storage and leaves the original Markdown or ZIP untouched. If you open identical content at another path, you choose whether to move or copy its annotations. You can export and import annotations per document as JSON. A shared export includes the notes, quoted passages, short excerpts before and after each quote, and the headings used to locate them.
 
 This model limits what a malicious document can access, but it does not make an untrusted file inherently safe. Review unexpected confirmation prompts before approving them.
 
