@@ -6,7 +6,7 @@ use commands::file::{
 };
 use commands::launch::LaunchState;
 use commands::local_fonts::LocalFontState;
-use commands::search::SearchState;
+use commands::sources::search::SearchState;
 use commands::sources::{LinkIndexState, SourceRegistry};
 use commands::update::UpdateCheckerState;
 use commands::watcher::{CustomCssWatcherState, DirWatcherState, WatcherState, WatcherWorker};
@@ -146,7 +146,6 @@ pub fn run() {
             commands::launch::get_cli_args,
             commands::shell_integration::get_shell_integration_status,
             commands::shell_integration::set_shell_integration_enabled,
-            commands::search::search_in_directory,
             commands::sources::register_native_source,
             commands::sources::register_native_document_source,
             commands::sources::register_zip_source,
@@ -158,9 +157,8 @@ pub fn run() {
             commands::sources::resolve_source_document_link,
             commands::sources::read_source_markdown,
             commands::sources::read_source_image,
-            commands::sources::search_source,
+            commands::sources::search::search_source,
             commands::sources::resolve_source_wiki_links,
-            commands::sources::list_source_backlinks,
             commands::sources::get_source_link_context,
             commands::sources::get_source_reference_validation,
             commands::sources::metadata::get_source_metadata_candidates,

@@ -36,7 +36,7 @@ export function nativeDocumentPath(
     : normalizePath(source.nativePath);
 }
 
-function nativeComparisonPath(path: string): string {
+export function nativeComparisonPath(path: string): string {
   const normalized = normalizePath(path);
   if (normalized.startsWith("//")) {
     // Keep the path within the share case-sensitive to match the Rust preflight.

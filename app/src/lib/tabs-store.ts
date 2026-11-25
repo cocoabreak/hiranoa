@@ -12,7 +12,8 @@ import {
 } from "$lib/actions/explorer-actions";
 import { authorizeArchivePath, authorizePath } from "$lib/actions/security";
 import { openMarkdownFile, openSourceMarkdown } from "$lib/actions/file-actions";
-import { nativeDocumentPath, registerNativeSource, registerZipSource } from "$lib/document-sources";
+import { nativeDocumentPath, registerNativeSource } from "$lib/document-sources";
+import { withRegisteredArchive } from "$lib/document-resources";
 import type { DocumentSourceInfo } from "$lib/types";
 import { LatestSaveQueue } from "$lib/state-save-queue";
 import { sessionUiStateStore } from "$lib/stores/session-ui-state.svelte";
@@ -83,7 +84,17 @@ export async function restoreSessionSnapshot(session: PersistedSession): Promise
           if (!(await openMarkdownFile(path, captureOpenTarget(paneId)))) continue;
         } else {
           const cacheKey = `${persistedSource.kind}:${persistedSource.nativePath}`;
-          let source = sourceCache.get(cacheKey);
+          const open = async (source: DocumentSourceInfo) => {
+            const opened = await openSourceMarkdown(
+              { sourceId: source.id, path: documentPath },
+              source,
+              undefined,
+              captureOpenTarget(paneId)
+            );
+            if (opened) sourceCache.set(cacheKey, source);
+            return opened;
+          };
+          const source = sourceCache.get(cacheKey);
           if (!source) {
             const accessPath =
               persistedSource.kind === "native"
@@ -111,22 +122,16 @@ export async function restoreSessionSnapshot(session: PersistedSession): Promise
                 : await authorizePath(accessPath))
             )
               continue;
-            source =
+            const opened =
               persistedSource.kind === "native"
-                ? await registerNativeSource(persistedSource.nativePath)
-                : await registerZipSource(persistedSource.nativePath);
-            sourceCache.set(cacheKey, source);
-          }
-          if (
-            !(await openSourceMarkdown(
-              { sourceId: source.id, path: documentPath },
-              source,
-              undefined,
-              captureOpenTarget(paneId)
-            ))
-          ) {
-            continue;
-          }
+                ? await open(await registerNativeSource(persistedSource.nativePath))
+                : await withRegisteredArchive(
+                    persistedSource.nativePath,
+                    () => tabStore.allTabs,
+                    open
+                  );
+            if (!opened) continue;
+          } else if (!(await open(source))) continue;
         }
         const restored = tabs.tabs.find((tab) => tab.id === tabs.activeTabId);
         if (restored) {

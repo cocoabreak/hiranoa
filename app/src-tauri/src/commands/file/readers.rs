@@ -74,7 +74,8 @@ pub(crate) fn build_markdown_content(raw: String, byte_size: u64) -> MarkdownFil
     }
 }
 
-pub(crate) fn read_file_inner(state: &AllowedRoots, path: &str) -> Result<String, String> {
+#[cfg(test)]
+pub(super) fn read_file_inner(state: &AllowedRoots, path: &str) -> Result<String, String> {
     read_file_with_size_inner(state, path).map(|(raw, _)| raw)
 }
 

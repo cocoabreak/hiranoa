@@ -2,10 +2,11 @@ import { workspaceStore } from "$lib/stores/workspace.svelte";
 import { sessionUiStateStore } from "$lib/stores/session-ui-state.svelte";
 import { captureOpenTarget, type OpenTarget } from "./workspace-actions";
 import { openMarkdownFile, openSourceMarkdown } from "$lib/actions/file-actions";
-import { nativePathsEqual, registerZipSource } from "$lib/document-sources";
+import { nativePathsEqual } from "$lib/document-sources";
 import { explorerStore } from "$lib/stores/explorer.svelte";
 import { tabStore, type ClosedTabEntry } from "$lib/stores/tab.svelte";
-import type { DocumentRef, DocumentSourceInfo } from "$lib/types";
+import { withRegisteredArchive } from "$lib/document-resources";
+import type { DocumentSourceInfo } from "$lib/types";
 
 function liveZipSource(entry: ClosedTabEntry): DocumentSourceInfo | undefined {
   const source = entry.tab.source;
@@ -28,13 +29,12 @@ async function reopenSourceDocument(entry: ClosedTabEntry, target: OpenTarget): 
     return openMarkdownFile(entry.tab.displayPath ?? entry.tab.path, target);
   }
 
-  let source = savedSource;
-  let document: DocumentRef = savedDocument;
-  if (savedSource.kind === "zip") {
-    source = liveZipSource(entry) ?? (await registerZipSource(savedSource.nativePath));
-    document = { ...savedDocument, sourceId: source.id };
-  }
-  return openSourceMarkdown(document, source, undefined, target);
+  const open = (source: DocumentSourceInfo) =>
+    openSourceMarkdown({ ...savedDocument, sourceId: source.id }, source, undefined, target);
+  const live = liveZipSource(entry);
+  return live
+    ? open(live)
+    : withRegisteredArchive(savedSource.nativePath, () => tabStore.allTabs, open);
 }
 
 /** 直近に閉じたタブを、保存済みコンテンツではなく通常の安全な読み込み経路で開き直す。 */

@@ -6,6 +6,18 @@ import { i18n } from "$lib/i18n/index.svelte";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
 describe("global search focus", () => {
+  it("shows a partial search notice even with zero matches", async () => {
+    render(GlobalSearchPanel);
+    globalSearchStore.query = "missing";
+    globalSearchStore.truncated = true;
+    try {
+      expect(await screen.findByText(i18n.m.globalSearch.resultsLimited)).toBeInTheDocument();
+      expect(screen.queryByText(i18n.m.globalSearch.noResults)).not.toBeInTheDocument();
+    } finally {
+      globalSearchStore.clear();
+    }
+  });
+
   it("returns to the text input when the existing search command is invoked from metadata mode", async () => {
     render(GlobalSearchPanel);
     await fireEvent.click(screen.getByRole("tab", { name: i18n.m.metadata.search }));

@@ -42,8 +42,12 @@ export class GlobalSearchStore {
   syncSource(source: DocumentSourceInfo | null) {
     const scope = source ? `${source.id}:${source.generation ?? 0}` : null;
     if (this.sourceScope === scope) return;
-    this.requestId++;
     this.sourceScope = scope;
+    this.resetResults();
+  }
+
+  private resetResults() {
+    this.requestId++;
     this.results = [];
     this.isSearching = false;
     this.error = null;
@@ -53,7 +57,7 @@ export class GlobalSearchStore {
   async search() {
     this.syncSource(explorerStore.source);
     if (!this.query || !explorerStore.rootPath) {
-      this.results = [];
+      this.resetResults();
       return;
     }
 
@@ -96,11 +100,8 @@ export class GlobalSearchStore {
   }
 
   clear() {
-    this.requestId++;
     this.query = "";
-    this.results = [];
-    this.error = null;
-    this.truncated = false;
+    this.resetResults();
   }
 
   async openMatch(result: SearchResult, lineNumber: number, other = false): Promise<boolean> {

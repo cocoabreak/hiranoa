@@ -149,7 +149,10 @@ describe("reopenRecentlyClosedTab", () => {
     );
     const registered = { ...source, id: "zip-reopened" };
     vi.mocked(registerZipSource).mockResolvedValue(registered);
-    vi.mocked(openSourceMarkdown).mockResolvedValue(true);
+    vi.mocked(openSourceMarkdown).mockImplementation(async (document, source) => {
+      tabStore.addOrActivate({ ...tab("restored-zip", document.path), document, source });
+      return true;
+    });
 
     const closing = tabStore.closeAndUnwatch("zip-tab");
     const reopening = reopenRecentlyClosedTab();
@@ -160,6 +163,7 @@ describe("reopenRecentlyClosedTab", () => {
     finishUnwatch?.();
     await closing;
     await expect(reopening).resolves.toBe(true);
+    expect(invoke).not.toHaveBeenCalledWith("unregister_source", { sourceId: registered.id });
     expect(registerZipSource).toHaveBeenCalledWith("C:/notes/archive.zip");
     expect(openSourceMarkdown).toHaveBeenCalledWith(
       { sourceId: "zip-reopened", path: "README.md" },

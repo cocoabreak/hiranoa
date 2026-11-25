@@ -5,7 +5,6 @@ pub mod git_history;
 pub mod launch;
 pub mod local_fonts;
 pub mod menu;
-pub mod search;
 pub mod shell_integration;
 pub mod sources;
 pub mod update;

@@ -213,6 +213,15 @@ fn watch_key(path: &str) -> String {
     let normalized = watch_request_display(path);
     #[cfg(windows)]
     {
+        if let Some(unc) = normalized.strip_prefix("//") {
+            // UNC server/share names are ASCII case-insensitive. The share decides how to compare entries.
+            let share_end = unc.match_indices('/').nth(1).map_or(unc.len(), |(i, _)| i);
+            return format!(
+                "//{}{}",
+                unc[..share_end].to_ascii_lowercase(),
+                &unc[share_end..]
+            );
+        }
         normalized.to_lowercase()
     }
     #[cfg(not(windows))]
@@ -507,6 +516,19 @@ mod tests {
         assert_eq!(
             watch_key("//?/UNC/server/share/notes"),
             watch_key("//server/share/notes")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn watch_keys_preserve_case_inside_unc_shares() {
+        assert_eq!(
+            watch_key("//Server/Share/Note.md"),
+            watch_key("//server/share/Note.md")
+        );
+        assert_ne!(
+            watch_key("//Server/Share/Note.md"),
+            watch_key("//server/share/note.md")
         );
     }
 

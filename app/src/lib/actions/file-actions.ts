@@ -1,13 +1,11 @@
 import { captureOpenTarget, type OpenTarget } from "./workspace-actions";
 import { MAX_WORKSPACE_TABS, workspaceStore } from "$lib/stores/workspace.svelte";
 import {
-  retainPendingSource,
-  retainPendingPath,
-  hasPendingPath,
-  hasPendingSource,
-  reconcileDocumentResource,
+  documentWatch,
+  retainWatch,
+  ensureWatch,
+  releaseUnusedWatch,
 } from "$lib/document-resources";
-import { explorerStore } from "$lib/stores/explorer.svelte";
 import { invoke } from "@tauri-apps/api/core";
 import { ask } from "@tauri-apps/plugin-dialog";
 import { tabStore } from "$lib/stores/tab.svelte";
@@ -105,24 +103,9 @@ export async function openSourceMarkdown(
   confirm?: LargeMarkdownConfirm,
   target: OpenTarget = captureOpenTarget()
 ): Promise<boolean> {
-  const release = retainPendingSource(source.id);
-  const nativePath = nativeDocumentPath(source, document);
-  const watchPath =
-    nativePath ?? (source.capabilities.watch === "container" ? source.nativePath : null);
-  const releasePath = watchPath ? retainPendingPath(watchPath) : () => {};
-  const isUsed = () =>
-    nativePath
-      ? hasPendingPath(nativePath) ||
-        tabStore.allTabs.some(
-          (tab) =>
-            !!tab.document &&
-            !!tab.source &&
-            nativeDocumentIdentity(tab.source, tab.document) ===
-              nativeDocumentIdentity(source, document)
-        )
-      : hasPendingSource(source.id) ||
-        explorerStore.source?.id === source.id ||
-        tabStore.allTabs.some((tab) => tab.source?.id === source.id);
+  const watch = documentWatch(source, document);
+  const release = watch && retainWatch(watch);
+  const tabsInUse = () => tabStore.allTabs;
   try {
     const key = documentKey(document);
     const displayPath = displayDocumentPath(source, document);
@@ -197,9 +180,7 @@ export async function openSourceMarkdown(
       });
     }
 
-    if (isNew) {
-      if (watchPath) await reconcileDocumentResource(watchPath, isUsed);
-    }
+    if (isNew && watch) await ensureWatch(watch, tabsInUse);
 
     if (source.kind === "native") {
       recentStore.addFile(displayPath);
@@ -211,14 +192,8 @@ export async function openSourceMarkdown(
       tabs.tabs.some((tab) => tab.id === tabs.activeTabId && tab.path === tabKey)
     );
   } finally {
-    releasePath();
-    release();
-    if (watchPath && !isUsed())
-      await reconcileDocumentResource(
-        watchPath,
-        isUsed,
-        source.kind === "zip" ? source.id : undefined
-      );
+    release?.();
+    if (watch) await releaseUnusedWatch(watch, tabsInUse);
   }
 }
 
